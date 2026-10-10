@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import json
 import re
+import shutil
 import statistics
 import sys
 import time
@@ -98,6 +99,27 @@ class StreamState:
 
     def elapsed_ms(self) -> int:
         return round((time.perf_counter() - self.t0) * 1000)
+
+
+INSTALL_HINTS = {
+    "win32": "winget install Gyan.FFmpeg",
+    "darwin": "brew install ffmpeg",
+}
+
+
+def ffmpeg_missing_message() -> str | None:
+    """None if ffmpeg is on PATH, otherwise a message worth reading."""
+    if shutil.which("ffmpeg"):
+        return None
+    hint = INSTALL_HINTS.get(
+        sys.platform, "install ffmpeg with your package manager"
+    )
+    return (
+        "ffmpeg is not on PATH, and the probe needs it to decode audio.\n"
+        "  install:  {}\n"
+        "  then open a new terminal so PATH is picked up, and check with:\n"
+        "            ffmpeg -version".format(hint)
+    )
 
 
 async def ffmpeg_pcm(path: Path) -> asyncio.subprocess.Process:
@@ -204,19 +226,29 @@ async def receive_loop(ws, state: StreamState, out_fh) -> None:
         render(state, msg.get("tokens") or [])
 
 
-async def send_loop(ws, proc, state: StreamState) -> None:
+async def send_loop(ws, proc, state: StreamState, primed: bytes = b"") -> None:
+    """Stream decoded audio at real-time pace, then end the stream.
+
+    `primed` is the first chunk, already read to prove the decode works before
+    a connection was opened. An empty *binary* frame counts as audio to Soniox,
+    so zero-length reads are never forwarded.
+    """
     index = 0
+    pending = primed
     while True:
-        try:
-            chunk = await proc.stdout.readexactly(CHUNK_BYTES)
-        except asyncio.IncompleteReadError as exc:
-            chunk = exc.partial
-            if chunk:
-                await ws.send(chunk)
-                state.sent_ms += len(chunk) // BYTES_PER_MS
-            break
+        if pending:
+            chunk, pending = pending, b""
+        else:
+            try:
+                chunk = await proc.stdout.readexactly(CHUNK_BYTES)
+            except asyncio.IncompleteReadError as exc:
+                chunk = exc.partial
+                if chunk:
+                    await ws.send(chunk)
+                    state.sent_ms += len(chunk) // BYTES_PER_MS
+                break
         await ws.send(chunk)
-        state.sent_ms += CHUNK_MS
+        state.sent_ms += len(chunk) // BYTES_PER_MS
         index += 1
         # pace at real time so recv offsets are comparable to audio offsets
         target = state.t0 + index * (CHUNK_MS / 1000)
@@ -233,9 +265,15 @@ async def send_loop(ws, proc, state: StreamState) -> None:
 
 
 async def run_stream(args: argparse.Namespace) -> int:
+    missing = ffmpeg_missing_message()
+    if missing:
+        print(missing, file=sys.stderr)
+        return 2
+
     if not settings.soniox_api_key:
         print(
-            "SONIOX_API_KEY is empty. Copy .env.example to .env and set it.",
+            "SONIOX_API_KEY is empty. Copy .env.example to .env and set it.\n"
+            "  On Windows, check the file is `.env` and not `.env.txt`.",
             file=sys.stderr,
         )
         return 2
@@ -254,7 +292,33 @@ async def run_stream(args: argparse.Namespace) -> int:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    proc = await ffmpeg_pcm(audio)
+    try:
+        proc = await ffmpeg_pcm(audio)
+    except (FileNotFoundError, NotADirectoryError):  # PATH changed under us
+        print(ffmpeg_missing_message() or "could not start ffmpeg",
+              file=sys.stderr)
+        return 2
+
+    # Read the first chunk before connecting: a file ffmpeg cannot decode
+    # should not cost a Soniox connection, and an empty stream would otherwise
+    # look like a successful run that transcribed nothing.
+    try:
+        primed = await proc.stdout.readexactly(CHUNK_BYTES)
+    except asyncio.IncompleteReadError as exc:
+        primed = exc.partial
+    if not primed:
+        detail = (await proc.stderr.read()).decode(errors="replace").strip()
+        await proc.wait()
+        print(
+            "ffmpeg produced no audio from {}. The file may be corrupt, "
+            "silent, or not an audio file.".format(audio),
+            file=sys.stderr,
+        )
+        if detail:
+            print("ffmpeg said:\n  " + detail.replace("\n", "\n  "),
+                  file=sys.stderr)
+        return 2
+
     state = StreamState()
 
     print("config: " + json.dumps(config, ensure_ascii=False))
@@ -287,7 +351,7 @@ async def run_stream(args: argparse.Namespace) -> int:
             state.t0 = time.perf_counter()
             await ws.send(json.dumps(config))
             receiver = asyncio.create_task(receive_loop(ws, state, out_fh))
-            sender = asyncio.create_task(send_loop(ws, proc, state))
+            sender = asyncio.create_task(send_loop(ws, proc, state, primed))
             await sender
             try:  # server flushes remaining tokens, then {"finished": true}
                 await asyncio.wait_for(receiver, timeout=60)

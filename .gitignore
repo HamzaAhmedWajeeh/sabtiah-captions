@@ -13,3 +13,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.egg-info/
+
+# raw Soniox captures: verbatim transcripts of whatever was recorded.
+# Committing one is a deliberate act (git add -f), e.g. into tests/fixtures/.
+docs/captures/*.jsonl
