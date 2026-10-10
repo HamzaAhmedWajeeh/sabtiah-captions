@@ -12,8 +12,22 @@ speech. See [What is still untested](#what-is-still-untested).
 | `run2-oneway.jsonl` | one-way to `en`, glossary context | 1639 | 28 |
 | `run3-noglossary.jsonl` | two-way `ar`/`en`, empty context | 1672 | 31 |
 
-All three streamed the full 300 s and closed with `{"finished": true}`. Audio
-spend so far: **15 minutes**.
+Two follow-up captures on the same day added the `en`->`ar` direction and a
+second Arabic clip; see [Follow-up
+runs](#follow-up-runs-saudi-clip-and-the-first-english-pass).
+
+| Capture | Config | Responses | Endpoints |
+| --- | --- | --- | --- |
+| `run4-saudi.jsonl` | two-way, glossary context | 1658 | **1** |
+| `run5-english.jsonl` | two-way, glossary context | 682 | 33 |
+
+All five streamed their full duration and closed with `{"finished": true}`.
+Audio spend so far: **22 minutes**.
+
+The `en`->`ar` gap is closed. Two gaps remain and both are recorded in [What is
+still untested](#what-is-still-untested): Latin-script technical terms are
+**not** preserved in Arabic captions, and Saudi dialect is still unmeasured
+because `run4` turned out to be MSA news register.
 
 ## API facts re-verified against the live docs (2026-10-10)
 
@@ -268,10 +282,21 @@ Three things worth internalising:
 **Not the scripted sentences.** The ten-sentence script was never recorded.
 What is on the machine instead:
 
-| Path | What it is |
-| --- | --- |
-| `recordings/podcast-5min.m4a` | a 5-minute cut, 10:00-15:00, of a real Arabic podcast |
-| `recordings/podcast-full.m4a` | the full episode that cut came from |
+| Path | What it is | Used by |
+| --- | --- | --- |
+| `recordings/podcast-5min.m4a` | 5-minute cut, 10:00-15:00, Egyptian Arabic podcast | run1, run2, run3 |
+| `recordings/podcast-full.m4a` | the full episode that cut came from | - |
+| `recordings/saudi-5min.m4a` | 5-minute cut, 10:00-15:00, Arabic news analysis (Yemen) | run4 |
+| `recordings/saudi-full.m4a` | the full episode that cut came from | - |
+| `recordings/english-2min.m4a` | 2-minute cut, Joe Rogan, native US English | run5 |
+| `recordings/english-full.m4a` | the full episode that cut came from | - |
+
+All six are cuts from YouTube and all are covered by the same rule below.
+Despite the filename, `saudi-5min.m4a` is **not demonstrably Saudi dialect** -
+see [The Saudi clip is not demonstrably
+Saudi](#the-saudi-clip-is-not-demonstrably-saudi). The name is kept because
+three captures and a commit already reference it; it describes the channel, not
+the dialect.
 
 Natural conversational speech, two speakers who interrupt each other, not read
 aloud - which made it a *better* probe subject than the script would have been
@@ -560,14 +585,31 @@ showed up in the data:
 3. **A segment can have no translation at all.** Segment 23's original is
    `يعني` and its translation is empty. Option A must render a paired line with
    one side blank; Option B just never shows a paragraph there.
-4. **The `en`→`ar` direction is untested.** Option A is the harder thing to
-   back out of, and six days before the demo is the wrong time to discover its
-   precondition only held in one direction.
+4. ~~**The `en`→`ar` direction is untested.**~~ Since resolved: it works, and
+   it behaves the same way. This reason no longer counts against Option A - but
+   reason 5 replaces it, and is worse.
+5. **Endpoints can fail to arrive at all.** `run4-saudi.jsonl` produced **one
+   `<end>` in 300 seconds**: a single segment, 3,974 characters. Option A's
+   unit of display is the segment, so on that audio Option A renders one
+   ever-growing paired block for the entire talk. Option B has the same problem
+   in its paragraph rule and needs the same fix (below), but at least its fix
+   is local to paragraph breaking rather than to the whole data model.
 
-Option B also needs **less** than the spec assumed: the "assign the segment to
-its majority language" rule is unnecessary, because Soniox never tags embedded
-English as `en` (question 3). Route on `translation_status` and
-`source_language`, never on `language`.
+Option B also needs **less** than the spec assumed in one place and **more** in
+another.
+
+Less: the "assign the segment to its majority language" rule is unnecessary.
+Soniox never tags embedded English as `en` (question 3), and it does tag a
+genuinely English turn as `en` (run5), so per-token `language` is already the
+right answer at the utterance level. Routing on `language` is safe, with
+`translation_status` deciding which side a token belongs to.
+
+More: **`<end>` cannot be the only paragraph break.** With one endpoint per
+five minutes on sustained speech, the spec's rule produces a single unbounded
+paragraph. Phase 2 adds a soft break on paragraph size - cut at a token
+boundary once a paragraph exceeds a character budget - with `<end>` kept as the
+hard break whenever it does arrive. The 200-segment cap also has to count
+paragraphs after this splitting, or it never engages.
 
 Record for later: Option A's precondition **held**, so if the "both" view
 becomes important after the demo, it is a supported change rather than a
@@ -577,13 +619,16 @@ gamble.
 
 The gap that matters most, stated plainly so it does not get lost:
 
-- **English speech → Arabic captions never happened.** Every one of the 4,493
-  translation tokens across three captures is `ar`→`en`. The product premise is
-  bidirectional; half of it has no evidence behind it. The cheapest fix is a
-  60-90 s recording of English speech — which also sidesteps the YouTube
-  provenance problem, since it would be first-party audio. That is one run
-  inside the 1-5 minute budget rule.
-- **Saudi Arabic is untested.** The audio is Egyptian. The audience is Saudi.
+- ~~**English speech → Arabic captions never happened.**~~ **Answered** by
+  `run5-english.jsonl`: the direction is detected automatically and behaves
+  like the other one. See [English to Arabic: the direction
+  works](#english-to-arabic-the-direction-works).
+- **Latin-script technical terms in Arabic captions do not survive**, and the
+  `translation_terms` fix for it is untested. Highest-value remaining
+  experiment; see the `en`→`ar` script section.
+- **Saudi Arabic is still untested.** `run4-saudi.jsonl` turned out to be
+  MSA-register news analysis about Yemen with zero distinctively Saudi lexis,
+  so it does not answer the question. Needs casual Saudi conversation.
 - **Live microphone capture is untested.** All three captures came through
   `ffmpeg` from a file. `MicSource` and the `sounddevice` callback path are
   Phase 4.
@@ -594,6 +639,288 @@ The gap that matters most, stated plainly so it does not get lost:
 - **Sessions longer than 5 minutes.** The 300-minute cap and the 280-minute
   rollover (BUILD_SPEC section 3) are unexercised, as is the 20 s keepalive —
   audio flowed continuously, so no keepalive was ever needed.
+
+## Follow-up runs: Saudi clip and the first English pass
+
+Two more two-way captures with the glossary on, one pass each, 2026-10-11.
+7 minutes of audio; project total now **22 minutes**.
+
+| Capture | Audio | Responses | Endpoints | Segments |
+| --- | --- | --- | --- | --- |
+| `run4-saudi.jsonl` | 5 min, Arabic news-analysis | 1658 | **1** | **1** |
+| `run5-english.jsonl` | 2 min, Joe Rogan, native US English | 682 | 33 | 33 |
+
+### The biggest finding is not about either language
+
+**Endpoint detection is a function of speech style, and on continuous speech it
+effectively does not fire.**
+
+| Capture | Speech style | Endpoints in the clip | Longest segment |
+| --- | --- | --- | --- |
+| `run1` Egyptian podcast | conversational, two speakers | 30 / 5 min | 59.5 s |
+| `run3` same, no glossary | conversational | 31 / 5 min | — |
+| `run4` Arabic news analysis | sustained monologue | **1 / 5 min** | **299.5 s** |
+| `run5` English podcast | fast back-and-forth | 33 / 2 min | 52.3 s |
+
+`run4` produced **one** `<end>` in 300 seconds. The whole five minutes is a
+single endpoint-bounded segment: 3,974 characters of original text, 5,350 of
+translation, one paragraph.
+
+This breaks a load-bearing assumption in BUILD_SPEC section 6's Option B,
+which says "Original-stream `<end>` starts a new paragraph in the original's
+language stream". On `run4` that rule yields exactly one paragraph for the
+entire talk - an unbounded, ever-growing block that no phone can render and
+that defeats the 200-segment memory cap, because the cap counts segments and
+there is only ever one.
+
+**Phase 2 therefore needs a secondary paragraph break that does not depend on
+`<end>`.** A soft cap on paragraph length (characters, or elapsed time since
+the paragraph opened), breaking at a token boundary, with `<end>` still taken
+as a hard break when it arrives. This is a deviation from the spec's wording
+and is recorded here as the reason for it.
+
+A Saturday talk is much more likely to resemble `run4` than `run1`: a speaker
+presenting without interruption produces few endpoints. Do not rely on them.
+
+### English to Arabic: the direction works
+
+**Two-way mode picks the direction automatically and correctly.** No config
+change, no language hint beyond `language_hints: ["ar", "en"]`.
+
+```
+original tokens by language:             {'en': 3528, None: 33}
+translation (source_language, language):  {('en', 'ar'): 843}
+```
+
+Every original token is `en`; every translation token is `en` -> `ar`. Compare
+the Arabic clips, where the same config produced `{'ar': ...}` and
+`('ar', 'en')`. This also resolves an ambiguity left open by Phase 1: question
+3 found that `language` is `ar` on English *terms embedded in Arabic speech*,
+but a genuinely English turn **is** tagged `en`. So `language` does
+discriminate at the utterance level, and routing on it is safe - it simply does
+not switch mid-sentence for loanwords.
+
+Everything measured in Phase 1 behaves identically in this direction:
+
+- **Translations after `<end>`: none.** 0 of 33, by the attribution-free check.
+- **Non-final translation tokens: none.** 843 of 843 are `is_final: true`. The
+  translated stream is append-only in both directions.
+- **`<end>` still carries `translation_status: "none"`** - 33 of them.
+- **Delays are the same**, within noise (see the table below).
+
+### English to Arabic: five sentences, with back-translations
+
+Back-translations are mine, rendered literally so the Arabic can be judged
+without reading Arabic.
+
+**1. Clean.** Meaning, register and clause order all survive.
+
+> **EN:** And as she was looking for seashells, she found a skeleton of an ichthyosaur buried in a cliff.
+> **AR:** وأثناء بحثها عن أصداف، عثرت على هيكل عظمي لإيكثيوسور مدفون في منحدر صخري.
+> **Back:** "And during her search for seashells, she found a skeletal frame of an ichthyosaur buried in a rocky cliff."
+
+**2. Clean, including an idiom.** "Rip me apart" becomes `يمزقني إربًا`, which
+is the idiomatic Arabic for being torn to shreds - not a literal gloss.
+
+> **EN:** I think paleontology Twitter is going to rip me apart for not knowing the thing. But come on, I'm hyped up now.
+> **AR:** أعتقد أن تويتر الخاص بالعلم الأحفوري سيمزقني إربًا لأنني لا أعرف هذا الشيء. لكن هيا، أنا متحمس جدًا الآن.
+> **Back:** "I think the Twitter of paleontological science will tear me to shreds because I don't know this thing. But come on, I am very excited now."
+
+**3. Clean and natural.** Colloquial English, idiomatic Arabic.
+
+> **EN:** I don't know how many you had before you got here.
+> **AR:** لا أعرف كم واحدة كانت عندك قبل أن تأتي إلى هنا.
+> **Back:** "I don't know how many you had before you came here."
+
+**4. Wrong: a grammatical number error, repeated.** `قردان` is the *dual* -
+"two monkeys" - not a plural, and "apes" as distinct from monkeys is lost.
+Soniox made the same substitution in all three segments where "apes" appeared.
+
+> **EN:** A—I think they're technically apes.
+> **AR:** أ—أظن أنهم تقنيًا قردان.
+> **Back:** "A—I think they are technically two monkeys."
+
+**5. Total breakdown.** Coined profanity defeats it completely; `فطيرة` is
+"pie".
+
+> **EN:** Fucking fuck-witted shitgibbon. I don't—just something.
+> **AR:** يا له من أحمق ذو فطيرة لا تُصدق. أنا لا—مجرد شيء ما.
+> **Back:** "What an idiot with an unbelievable pie. I am not—just something."
+
+The pattern: ordinary speech, narrative and technical vocabulary translate
+well; invented words, slang and profanity are where it fails, and it fails by
+confidently producing fluent nonsense rather than leaving a gap. One more of the
+same kind - "large deposits" became `ردائعًا كبيرة`, and `ردائع` is not a word.
+
+### English to Arabic: nothing stays in Latin script
+
+**This is the finding with the most consequence for the demo.** In the Arabic
+captions, Latin-script runs surviving from the English original:
+
+```
+total 0 runs, 0 distinct
+```
+
+Zero. Every name, place and brand is converted to Arabic script - either
+transliterated or translated:
+
+| English | Arabic caption | What happened |
+| --- | --- | --- |
+| Mary Anning | `ماري آنينغ` | transliterated |
+| Twitter | `تويتر` | transliterated |
+| Marsh, Mantell | `مارش`, `مانتيل` | transliterated |
+| Iguanodon, ichthyosaur | `إيغوانودون`, `إيكثيوسور` | transliterated |
+| Trump | `ترامب` | transliterated |
+| Crystal Palace | `قصر الكريستال` | **translated** |
+| North America, West Germany | `أمريكا الشمالية`, `ألمانيا الغربية` | translated |
+
+**This is the exact mirror of the `ar`->`en` direction**, where English terms
+embedded in Arabic speech stayed in Latin script on both sides. So the two
+directions behave oppositely, and the `ar`->`en` result does **not** predict
+this one.
+
+Why it matters on Saturday: a Saudi tech audience expects `RAG`, `MCP`, `LLM`
+and `GPT` to appear as Latin text even inside Arabic prose - that is how these
+terms are normally written. On this evidence, two-way mode will render them
+`راغ`, `إم سي بي`, `إل إل إم` instead, which is close to unreadable.
+
+`config/glossary.yaml` already carries the intended fix -
+`translation_terms: [{source: RAG, target: RAG}]` - which exists precisely to
+pin a term's output form. **It is untested**, because the Rogan clip contains
+none of the glossary terms. This is now the highest-value cheap experiment
+left: 60 seconds of English containing `RAG`, `MCP`, `LLM`, `embeddings` and
+`Sabtiah`, to see whether `translation_terms` holds them in Latin script in the
+Arabic output. Until that is known, treat Latin-script preservation in Arabic
+captions as **not working**.
+
+### The Saudi clip is not demonstrably Saudi
+
+**I cannot confirm the dialect, and the reason is informative.** Counting only
+standalone words (substring matching on Arabic is badly misleading - `فيه` is
+ordinary MSA, `مرة` means "once", `تو` prefixes dozens of unrelated words):
+
+| | `run1` Egyptian | `run4` "Saudi" |
+| --- | --- | --- |
+| Arabic words | 672 | 722 |
+| Egyptian markers | **35** (5.21%) | **0** |
+| Saudi/Gulf markers | 0 | **0** |
+| MSA markers | 13 (1.93%) | **23** (3.19%) |
+| `اللي` (pan-dialectal) | 20 | 27 |
+| bi-imperfect (dialect tense) | **35** | 8 |
+| sa-future (MSA tense) | 0 | 1 |
+
+`run1` is unambiguous: `عايز`, `إيه`, `إزاي`, `النهارده`, `بقى`, `برضه`, 35
+bi-imperfect verbs, no MSA future. Egyptian.
+
+`run4` has **no distinctively Saudi lexis at all** - none of `وش`, `أبغى`,
+`الحين`, `كذا`, `ايش`, `زين`, `تبغى`. What it has is MSA vocabulary with
+colloquial connectives (`اللي`, `زي ما`, `ودي`, `بيكون`): the pan-Arab
+"educated spoken Arabic" register of a news talk show. That register
+deliberately erases dialect, so **the clip cannot answer the Saudi question
+either way.**
+
+The content is also not Saudi-focused: it is a detailed analysis of the war in
+Yemen - Al-Hudaydah, Al-Khawkha, the Houthis, the Giants Brigades, Abu Zar'
+al-Mahrami, Dar al-Hadith in Damaj. The speakers address each other as Omar and
+Nayef. A Saudi channel covering Yemen with Saudi presenters speaking MSA is
+entirely plausible, and so is a Yemeni panel; the transcript cannot distinguish
+them.
+
+**What would settle it:** casual Saudi conversation, not broadcast - a Saudi
+podcast, vlog or interview where people speak to each other rather than to an
+audience. The dialect question only has an answer when speakers use dialect.
+
+### Saudi clip: translation quality, and how it compares to Egyptian
+
+The Arabic-to-English translation here is **more fluent** than the Egyptian
+clip's and **less accurate on names**, both for the same reason: formal register
+translates smoothly, and dense proper nouns are the weak spot.
+
+**Best three.** Long, dense, historically specific, and they hold together:
+
+> He founded this school, which is Dar al-Hadith, in Damaj, Sa'dah, and it was
+> an area that Yemenis flocked to to study religious sciences in general, and
+> Abu Zar' was one of them.
+
+> Therefore, between 2011 and 2014, the Houthis besieged Dar al-Hadith in
+> Damaj, and they were able to forcibly displace the Salafi from it. And these
+> Salafi displaced people in Damaj when they returned to the south, in fact,
+> were among the most important forces that had an active influence in Yemen's
+> landscape, of course against the Houthis.
+
+> Abu Zar' was born in 1980, so today he is 46 years old, and therefore he may
+> in fact be among the younger among the current active leaders in Yemen,
+> whether you see them in the Presidential Leadership Council or in the arena
+> in general.
+
+Dates, ages and place names survive; the clause structure is readable English.
+
+**Worst two, and the first is a serious error.**
+
+> ...the areas controlled by the Sharia are the ones you can push as fronts
+> against the Houthis.
+
+The Arabic is `المناطق اللي تسيطر عليها الشرعية`. `الشرعية` here means **"the
+legitimacy"** - standard shorthand for the internationally recognised Yemeni
+government. It is not `الشريعة` (Sharia). Soniox rendered it "the Sharia" or
+"religious" **all six times it occurred**, including "depots of the Sharia
+forces" (government forces) and "the head of religious authority in Yemen"
+(head of the legitimate authority). A consistent, confident, politically
+loaded mistranslation of a single high-frequency word.
+
+> ...and also the Dira al-Watan forces...
+
+`درع الوطن` is "Shield of the Nation", a named brigade. It came back
+transliterated and misread, as `Dira al-Watan` and later `Dar al-Watan` - two
+different spellings for the same unit in one transcript.
+
+Other proper-noun damage, all of the same family: `الهادوية` (the Hadawi Zaydi
+school) became "Hudayyid"; `مقبل بن هادي الوادعي` became "Manqib al-Bin Hadi
+al-Wada'i"; `العمالقة` (the Giants Brigades) was translated literally as "the
+giant forces" rather than kept as a unit name. One of these is not Soniox's
+fault - the transcript itself wrote `أرشاد العليمي` for `رشاد العليمي`, so
+"Arshad al-Ilimi" is a faithful translation of a transcription error.
+
+Confidence scores barely move between clips, which says the model is not
+flagging any of this:
+
+| | original finals (mean) | translation (mean) |
+| --- | --- | --- |
+| `run1` Egyptian | 0.973 | 0.891 |
+| `run4` Arabic news | 0.971 | 0.874 |
+| `run5` English | 0.963 | 0.886 |
+
+**Verdict against the Egyptian clip:** comparable transcript quality, better
+English prose, worse proper nouns. Neither clip's errors came with a low
+confidence score, so confidence cannot be used to suppress bad captions.
+
+### Delays, all five captures
+
+Same method as before: each distinct token counted once.
+
+| Capture | word first appears | word settles (final) | translation arrives |
+| --- | --- | --- | --- |
+| `run1` Egyptian, ar->en | 639 ms | 1510 ms | 679 ms |
+| `run4` Arabic news, ar->en | 627 ms | 1588 ms | 666 ms |
+| `run5` English, en->ar | **703 ms** | **1306 ms** | **725 ms** |
+
+Full distributions:
+
+```
+run4: first appears  median  627  p90  692  p99  720  max  813  (n=1580)
+      settles        median 1588  p90 2982  p99 4580  max 5486  (n=1700)
+      translation    median  666  p90  739  p99  780  max  851  (n=1629)
+
+run5: first appears  median  703  p90  767  p99  813  max  925  (n=574)
+      settles        median 1306  p90 2558  p99 3769  max 5285  (n=680)
+      translation    median  725  p90  772  p99  870  max  871  (n=843)
+```
+
+Latency is stable across language, direction and speech style: a word is on
+screen in 0.63-0.73 s and its translation lands within 0.67-0.73 s, in every
+capture. English finalises *faster* than Arabic (1306 ms vs 1510/1588 ms) and
+appears marginally slower. None of this changes any design decision - it is
+simply reliable.
 
 ## Verified without Soniox
 
@@ -619,8 +946,20 @@ The synthetic capture's **timings are invented**. It validates the measuring
 instrument, not Soniox's behavior, and it is deliberately *not* in
 `tests/fixtures/`.
 
-`tests/fixtures/` now holds the two real captures Phase 2 is to be built
-against - `run1.jsonl` (two-way) and `run2-oneway.jsonl` - checked to contain
-no API key and no audio. `run3-noglossary.jsonl` stays out: it exists to answer
-the glossary question, not to drive tests, and a third 2.4 MB fixture earns
-nothing.
+`tests/fixtures/` holds the four real captures Phase 2 is built against, each
+earning its place by exercising something the others do not:
+
+| Fixture | Why it is here |
+| --- | --- |
+| `run1.jsonl` | two-way `ar`->`en`, 30 endpoints: the ordinary case |
+| `run2-oneway.jsonl` | one-way config, the Phase 6 fallback path |
+| `run4-saudi.jsonl` | **1 endpoint in 300 s** - the no-paragraph-break case |
+| `run5-english.jsonl` | the only `en`->`ar` data, English originals tagged `en` |
+
+All four checked to contain no API key and no audio. `run3-noglossary.jsonl`
+stays out: it answers the glossary question and is otherwise a near-duplicate
+of `run1`.
+
+`run4-saudi.jsonl` is the important one for Phase 2. Without it, every test
+would run against captures where `<end>` arrives often, and the single-paragraph
+failure mode would never be exercised.
