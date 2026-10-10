@@ -1,0 +1,15 @@
+# secrets
+.env
+
+# session artifacts (never committed, never served)
+logs/
+recordings/
+clips/
+eval/out/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/

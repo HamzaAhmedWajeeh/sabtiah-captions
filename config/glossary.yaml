@@ -1,0 +1,19 @@
+# Shared across sessions. Fed into the Soniox `context` object on every connection.
+terms:
+  - RAG
+  - MCP
+  - LLM
+  - LLMs
+  - fine-tuning
+  - agent
+  - agents
+  - agentic
+  - embeddings
+  - vector database
+  - Sabtiah
+  - Cycls
+
+translation_terms:
+  - {source: agent, target: agent}
+  - {source: RAG, target: RAG}
+  - {source: Sabtiah, target: السبتية}

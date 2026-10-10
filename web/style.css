@@ -1,0 +1,12 @@
+/* Phase 3 replaces this with the real audience styling. */
+:root { color-scheme: dark; }
+body {
+  margin: 0;
+  padding: 1rem;
+  background: #0b0b0d;
+  color: #f2f2f2;
+  font: 22px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+h1 { font-size: 1.1rem; margin: 0; letter-spacing: 0.02em; }
+.disclaimer { font-size: 0.7rem; opacity: 0.6; margin: 0.25rem 0 1rem; }
+.status { opacity: 0.6; }
