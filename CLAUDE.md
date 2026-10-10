@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-The repo currently contains only `BUILD_SPEC.md` — no code, no git repo yet. Work starts at Phase 0 of the spec (skeleton + `pyproject.toml` + `.gitignore`). Initialize git before the first commit.
+**Phases 0, 1 and 2 are done. Phase 3 (server, broadcast, audience page) is next.**
+
+- **Phase 1 is answered**, with five captures in `docs/captures/` and the findings in `docs/soniox-notes.md`. Read that file before touching caption logic — several of its measurements contradict assumptions in BUILD_SPEC section 3 and section 6.
+- **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. 68 tests, all offline.
+- Two findings matter most for the phases ahead. **Endpoint detection can effectively never fire** — `run4-saudi` gave one `<end>` in 300 s — so `<end>` is not a reliable paragraph break and `captions.py` adds a soft size break. And **nothing stays in Latin script in Arabic captions**: `RAG`/`MCP`/`LLM` get transliterated in the `en`→`ar` direction. The `translation_terms` fix in `config/glossary.yaml` is untested and is the highest-value remaining experiment.
 
 ## BUILD_SPEC.md is the contract
 
@@ -28,9 +32,16 @@ uv run uvicorn app.main:app --reload             # dev server, port 8000
 uv run pytest                                    # all tests
 uv run pytest tests/test_captions.py::test_name  # single test
 uv run python tools/list_devices.py              # audio input devices (Phase 4)
-uv run python tools/probe_soniox.py --file <audio> --out <path.jsonl>   # Phase 1
-uv run python tools/eval_run.py --engine soniox --clips clips/          # Phase 7
+uv run python tools/probe_soniox.py --file <audio> --out <path.jsonl>   # Phase 1, SPENDS CREDIT
+uv run python tools/eval_run.py --engine soniox --clips clips/          # Phase 7, SPENDS CREDIT
+
+# offline: replay a capture through CaptionState, no Soniox calls
+uv run python tools/render_capture.py tests/fixtures/run1.jsonl --stats
+uv run python tools/render_capture.py tests/fixtures/run5-english.jsonl --lang ar
+uv run python tools/probe_soniox.py --analyze docs/captures/run1.jsonl
 ```
+
+Only `probe_soniox.py --file` and `eval_run.py` cost money. Everything else, including the whole test suite, runs off saved captures.
 
 Windows is the primary dev machine; `scripts/start.ps1` / `scripts/start.sh` (Phase 8) launch uvicorn + cloudflared together.
 
