@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Phases 0, 1 and 2 are done. Phase 3 (server, broadcast, audience page) is next.**
 
 - **Phase 1 is answered**, with five captures in `docs/captures/` and the findings in `docs/soniox-notes.md`. Read that file before touching caption logic — several of its measurements contradict assumptions in BUILD_SPEC section 3 and section 6.
-- **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. 68 tests, all offline.
+- **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. 69 tests, all offline. Build Phase 3 against `FakeSonioxClient` too — it paces a capture at real time, so the audience page can be judged at true speed.
+- **`docs/CHECKPOINT.md` is the short version**: what is done, what is next, the open items, and Soniox audio spent (**22.0 minutes** of the $10 budget so far).
 - Two findings matter most for the phases ahead. **Endpoint detection can effectively never fire** — `run4-saudi` gave one `<end>` in 300 s — so `<end>` is not a reliable paragraph break and `captions.py` adds a soft size break. And **nothing stays in Latin script in Arabic captions**: `RAG`/`MCP`/`LLM` get transliterated in the `en`→`ar` direction. The `translation_terms` fix in `config/glossary.yaml` is untested and is the highest-value remaining experiment.
 
 ## BUILD_SPEC.md is the contract
