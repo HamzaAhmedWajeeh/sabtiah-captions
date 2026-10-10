@@ -146,6 +146,63 @@ async def ffmpeg_pcm(path: Path) -> asyncio.subprocess.Process:
     )
 
 
+async def drain(stream: asyncio.StreamReader) -> bytes:
+    """Read a subprocess pipe to EOF, tolerating an already-dead writer."""
+    chunks: list[bytes] = []
+    try:
+        while True:
+            block = await stream.read(65536)
+            if not block:
+                break
+            chunks.append(block)
+    except (BrokenPipeError, ConnectionResetError, ValueError):
+        pass
+    return b"".join(chunks)
+
+
+async def stop_ffmpeg(proc: asyncio.subprocess.Process) -> str:
+    """Shut the decoder down and return whatever it wrote to stderr.
+
+    Needed on every exit path, not just the happy one. A stream that ends
+    early — an error response, a dropped connection — leaves ffmpeg mid-file
+    with a *full stdout pipe*, which costs two separate failures on Windows:
+
+    1. `proc.wait()` never returns while a pipe transport is still open, so
+       terminating an undrained decoder blocks forever. Draining stdout first
+       is what lets the process be reaped; `terminate()` alone is not enough,
+       and the symptom is a probe that appears to hang after printing the
+       error it was trying to report.
+    2. Skipping the shutdown entirely lets the transport be garbage-collected
+       after the loop closes, printing `RuntimeError: Event loop is closed`
+       over the error the operator actually needs to read.
+
+    Everything is bounded: a wedged decoder must never outlive the probe.
+    """
+    if proc.returncode is None:
+        try:
+            proc.terminate()
+        except (ProcessLookupError, OSError):
+            pass
+
+    stderr = b""
+    try:
+        _, stderr = await asyncio.wait_for(
+            asyncio.gather(drain(proc.stdout), drain(proc.stderr)), timeout=10
+        )
+    except (asyncio.TimeoutError, ValueError):
+        pass
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=10)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except (ProcessLookupError, OSError):
+            pass
+
+    return stderr.decode(errors="replace").strip()
+
+
 def stream_key(token: dict) -> str:
     """Label a token by the stream it belongs to, for the readable rendering."""
     if token.get("translation_status") == "translation":
@@ -340,29 +397,55 @@ async def run_stream(args: argparse.Namespace) -> int:
             )
             + "\n"
         )
-        async with websockets.connect(
-            WS_URL,
-            additional_headers={
-                "Authorization": "Bearer " + settings.soniox_api_key
-            },
-            max_size=None,
-            ping_interval=20,
-        ) as ws:
-            state.t0 = time.perf_counter()
-            await ws.send(json.dumps(config))
-            receiver = asyncio.create_task(receive_loop(ws, state, out_fh))
-            sender = asyncio.create_task(send_loop(ws, proc, state, primed))
-            await sender
-            try:  # server flushes remaining tokens, then {"finished": true}
-                await asyncio.wait_for(receiver, timeout=60)
-            except asyncio.TimeoutError:
-                receiver.cancel()
-                print("timed out waiting for `finished`", file=sys.stderr)
+        try:
+            async with websockets.connect(
+                WS_URL,
+                additional_headers={
+                    "Authorization": "Bearer " + settings.soniox_api_key
+                },
+                max_size=None,
+                ping_interval=20,
+            ) as ws:
+                state.t0 = time.perf_counter()
+                await ws.send(json.dumps(config))
+                receiver = asyncio.create_task(receive_loop(ws, state, out_fh))
+                sender = asyncio.create_task(send_loop(ws, proc, state, primed))
 
-    stderr = (await proc.stderr.read()).decode(errors="replace").strip()
-    await proc.wait()
-    if stderr:
-        print("ffmpeg: " + stderr, file=sys.stderr)
+                # Race them. The receiver finishing first means the server
+                # ended the stream early — an error response, almost always —
+                # and there is no point paying for, or waiting out, the rest
+                # of the audio.
+                await asyncio.wait(
+                    {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if receiver.done() and not sender.done():
+                    sender.cancel()
+                    print("stopped sending audio: the server ended the "
+                          "stream after {:.1f}s".format(state.sent_ms / 1000),
+                          file=sys.stderr)
+
+                try:
+                    await sender
+                except asyncio.CancelledError:
+                    pass  # cancelled just above
+                except websockets.exceptions.ConnectionClosed:
+                    # Expected when the server rejects the stream: it reports
+                    # the error, then closes while audio is still going out.
+                    # Anything else is a genuine send failure worth raising.
+                    if not state.error:
+                        raise
+
+                if not receiver.done():
+                    try:  # server flushes tokens, then {"finished": true}
+                        await asyncio.wait_for(receiver, timeout=60)
+                    except asyncio.TimeoutError:
+                        receiver.cancel()
+                        print("timed out waiting for `finished`",
+                              file=sys.stderr)
+        finally:
+            stderr = await stop_ffmpeg(proc)
+            if stderr:
+                print("ffmpeg: " + stderr, file=sys.stderr)
 
     print("\n{} responses -> {}".format(state.responses, out_path))
     if state.error:
@@ -666,7 +749,23 @@ def run_analyze(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def force_utf8_output() -> None:
+    """Make stdout/stderr UTF-8 regardless of the console code page.
+
+    On Windows, a redirected stdout defaults to the locale encoding (cp1252
+    here), and the first Arabic character then raises UnicodeEncodeError and
+    kills the run. Both the config echo (the glossary carries Arabic) and the
+    whole readable rendering are affected, so this has to happen before any
+    print.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main() -> int:
+    force_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--file", help="audio file to stream (any ffmpeg format)")
     parser.add_argument("--out", default="docs/captures/probe.jsonl",

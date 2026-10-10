@@ -1,9 +1,12 @@
 # Soniox notes (Phase 1)
 
-Status: **probe built and verified, not yet run against Soniox.** The five
-questions in BUILD_SPEC.md section 4 are unanswered because the run needs two
-things that are not on this machine yet: a `SONIOX_API_KEY` in `.env`, and an
-audio recording. See [What is still needed](#what-is-still-needed).
+Status: **the probe reaches Soniox and is rejected: the account has no funds.**
+The key authenticates, the config is accepted, and the server answers with
+`organization_balance_exhausted` (HTTP 402) before transcribing any audio. The
+five questions in BUILD_SPEC.md section 4 are therefore still unanswered — see
+[Blocked on account balance](#blocked-on-account-balance). Two real bugs in the
+probe were found and fixed on the way there, both Windows-specific, both
+recorded under [Platform bugs found and fixed](#platform-bugs-found-and-fixed).
 
 ## API facts re-verified against the live docs (2026-10-10)
 
@@ -87,8 +90,11 @@ translation with a specific source line.
 
 ## The five questions
 
-Unanswered until the probe runs. Each will be filled in with quoted token
-excerpts from the JSONL, as the spec requires.
+**All five are unanswered: no audio has been transcribed yet.** The probe is
+built, tested and verified against the live endpoint as far as the config
+frame; it is the account balance, not the tooling, that is missing. Each answer
+below will be filled in with quoted token excerpts from the JSONL, as the spec
+requires.
 
 ### 1. Do translation tokens for a segment ever arrive after that segment's `<end>`? How often, how late?
 
@@ -115,6 +121,14 @@ Option B's "assign the segment to its majority language" rule is needed to stop
 English words inside an Arabic sentence leaking into the English stream as
 fragments.
 
+**This is the one question the podcast audio may not be able to answer.** The
+scripted sentence in the heading was never recorded, and a 5-minute cut of
+conversational Arabic is not guaranteed to contain any English at all. If the
+capture shows no mixed-script segment, question 3 stays open and a different
+range has to be cut from `podcast-full.m4a` - the analyzer already prints
+"_No mixed-script segment in this capture._" for exactly this case, so the
+answer will be unambiguous either way.
+
 ### 4. What does `source_language` contain on translation tokens?
 
 _Pending capture._ The analyzer cross-tabulates `source_language` against
@@ -129,58 +143,136 @@ the segment's last word, and last translation token after the segment's last
 word. The third is the number that determines how far behind the speaker the
 translated caption actually runs.
 
-## The test recording
+## The test audio
 
-Ten scripted sentences read by Hamza with 1–2 s pauses: 1–3 Saudi Arabic, 4–6
-English, 7–10 mixed Arabic with English tech terms. Expected at
-`recordings/test-sentences.m4a`.
+**Not the scripted sentences.** The ten-sentence script was never recorded.
+What is on the machine instead:
 
-Hamza's note on interpreting it: his Arabic accent is not native Saudi, so
-Arabic accuracy from this recording is a **lower bound, not a verdict**. The
-run exists to learn how Soniox behaves, not to score it.
+| Path | What it is |
+| --- | --- |
+| `recordings/podcast-5min.m4a` | a 5-minute cut, 10:00-15:00, of a real Arabic podcast |
+| `recordings/podcast-full.m4a` | the full episode that cut came from |
 
-| # | Category | Script |
-| --- | --- | --- |
-| 1 | Saudi Arabic | السلام عليكم، حياكم الله، اليوم بنتكلم عن كيف نبني نظام ذكاء اصطناعي يشتغل على بيانات الشركة. |
-| 2 | Saudi Arabic | أول شي لازم نفهم وش المشكلة اللي نبي نحلها، بعدين نختار الأداة المناسبة. |
-| 3 | Saudi Arabic | صراحة التجربة كانت صعبة شوي، بس تعلمنا منها أشياء كثير. |
-| 4 | English | Today I want to show you how we cut our inference costs in half. |
-| 5 | English | The main problem was latency, every request took around three seconds. |
-| 6 | English | If you have questions, feel free to ask at the end of the session. |
-| 7 | Mixed | اليوم بنشرح RAG and agentic workflows. |
-| 8 | Mixed | استخدمنا vector database عشان نخزن الـ embeddings حقت المستندات. |
-| 9 | Mixed | الـ agent يقرأ الطلب، وبعدين يسوي tool call ويرجع النتيجة للمستخدم. |
-| 10 | Mixed | سوينا fine-tuning على موديل صغير، والنتائج كانت أحسن من GPT بكثير في هالمهمة. |
+Natural conversational speech, several speakers, not read aloud - which makes
+it a *better* probe subject than the script for questions 1, 2, 4 and 5, and a
+worse one for question 3, since nobody controls how much English it contains.
 
-### Side-by-side results
+Two consequences for how its output must be read:
 
-_Pending capture._ One row per sentence: what was said, what the transcript
-returned, what the translation returned, and a one-line judgment.
+- **There is no reference transcript.** Hamza does not speak Arabic, so neither
+  accuracy nor dialect can be checked against a known-good source. Any verdict
+  on transcript quality from this audio is an impression, not a measurement.
+  The side-by-side table against the ten sentences is **dropped** - there is
+  nothing to put in the "what I said" column.
+- **Whether it answers question 3 at all is itself an open question**, to be
+  decided from the capture: if the cut carries little or no English, a
+  different timestamp range has to be cut from `podcast-full.m4a`.
 
-### English technical terms in sentences 7–10
+### Provenance: this audio must never be committed
 
-_Pending capture._ For each term — RAG, vector database, embeddings, agent,
-tool call, fine-tuning, GPT — record whether it came back **kept in English**,
-**translated**, **transliterated** into Arabic script, or **garbled**, in the
-transcript and in the translation separately. These terms are the ones in
-`config/glossary.yaml`, so this run also measures whether the glossary context
-is doing anything.
+The recording is a cut from a YouTube video - third-party copyrighted material,
+and personal speech that nobody consented to have redistributed.
 
-## What is still needed
+- `recordings/` is gitignored (`.gitignore:6`); both files confirmed ignored
+  via `git check-ignore`.
+- **No audio goes into `tests/fixtures/`**, ever - not the m4a, not a decoded
+  wav, not a trimmed excerpt. Fixtures are the **JSONL captures only**, which
+  carry text and timings rather than the recording itself.
+- That still makes any committed capture from this source a verbatim
+  transcript of someone's podcast. Fine for a private repo's test data; worth
+  a second thought before this repo is ever made public.
 
-Neither input is present as of the last check (2026-10-10): there is no `.env`
-file in the project root, and `recordings/` is empty.
+## Blocked on account balance
 
-1. **`SONIOX_API_KEY`.** `cp .env.example .env` and paste the key from the
-   Soniox console. On Windows, check the file is `.env` and not `.env.txt` —
-   Explorer hides the extension. While in the console, set a monthly budget cap
-   (BUILD_SPEC section 8); budget-exhausted errors are handled as fatal, so a
-   cap fails safe.
-2. **The recording** at `recordings/test-sentences.m4a`. Any format works —
-   ffmpeg handles the decode; only the path in the run sheet needs to match.
+The one thing standing between this document and its answers.
 
-With both in place, `docs/captures/RUN.md` is the command sequence, and filling
-in the rest of this document takes a few minutes.
+```json
+{"tokens": [], "final_audio_proc_ms": 0, "total_audio_proc_ms": 0,
+ "error_code": 402, "error_type": "organization_balance_exhausted",
+ "error_message": "Organization balance exhausted. Please either add funds manually or enable autopay.",
+ "more_info": "https://soniox.com/docs/api-reference/errors#organization-balance-exhausted",
+ "request_id": "e819e5d6-15ff-4b91-9ae1-9928358efbca"}
+```
+
+Reproduced on four separate connections (request ids `7102f9c0`, `3db05f98`,
+`1a9f7e6b`, `e819e5d6`), arriving roughly 180 ms after the config frame, every
+time before a single token.
+
+**What this already proves**, without transcribing anything:
+
+- The `Authorization: Bearer` header works. A bad key returns
+  `unauthenticated`; this is a billing refusal, so the credential is good.
+- The config frame is accepted - including `translation: {"type": "two_way",
+  "language_a": "ar", "language_b": "en"}`, `enable_endpoint_detection`, and
+  the full `context` object with Arabic in `translation_terms`. A malformed
+  config returns `invalid_request` instead.
+- Phase 5's classification of `organization_balance_exhausted` as **fatal, do
+  not retry** is right, and the probe honored it: one attempt, no backoff loop.
+
+**To unblock:** add funds or enable autopay in the Soniox console, then run
+`docs/captures/RUN.md` top to bottom. While in the console, set the monthly
+budget cap (BUILD_SPEC section 8) - budget-exhausted errors are handled as
+fatal, so a cap fails safe rather than running up a bill.
+
+### One live detail the spec does not mention
+
+An error response is **a normal response object with error fields added**, not
+a bare error document: it carries `tokens: []`, `final_audio_proc_ms` and
+`total_audio_proc_ms` alongside `error_type`, plus an undocumented `more_info`
+URL. BUILD_SPEC section 3 describes errors as JSON with
+`error_code`/`error_type`/`error_message`/`request_id`, which is true but
+incomplete.
+
+Why it matters for Phase 5: a reader that checks for `tokens` before checking
+for `error_type` will treat a fatal error as a successful response that
+happened to contain no tokens, and sail straight past it. Check `error_type`
+first. `tools/probe_soniox.py` already does.
+
+## Platform bugs found and fixed
+
+Both were hit while trying to get the first capture out of a Windows machine,
+and both would have struck again on run day. Neither is a Soniox issue.
+
+### 1. Arabic output crashed the probe whenever stdout was redirected
+
+`UnicodeEncodeError: 'charmap' codec can't encode characters in position
+553-559` - thrown by the `config:` echo, because `config/glossary.yaml` carries
+Arabic in `translation_terms`.
+
+Python picks the locale encoding (cp1252 here) for a redirected stdout, so the
+first Arabic character killed the run. Not cosmetic: it would have taken down
+**every** piped or logged run the moment an Arabic caption rendered, which is
+to say all of them.
+
+Fixed by `force_utf8_output()`, called as the first statement in `main()`,
+reconfiguring stdout and stderr to UTF-8 with `errors="replace"`.
+
+### 2. The probe hung after reporting an error, and leaked ffmpeg
+
+An early-ending stream - the balance error, or any dropped connection - left
+the probe wedged for minutes after printing the error, then buried it under a
+`RuntimeError: Event loop is closed` traceback. Three stacked causes:
+
+1. **`proc.wait()` never returns while a pipe transport is still open.** ffmpeg
+   sits mid-file with a full stdout pipe, `terminate()` returns, `returncode`
+   stays `None`, and `wait()` blocks forever. Draining stdout first is what
+   lets the process be reaped - measured: `wait()` returns in ~10 ms after a
+   drain, versus never without one. This is the one worth remembering; it will
+   bite `FileSource` in Phases 2-3 and 5, and the Phase 7 eval tools, every
+   time a stream ends early.
+2. **The sender kept streaming into a dead connection.** The receiver recorded
+   the error immediately, but the send loop went on pacing audio in real time,
+   so a rejected stream still took the recording's full duration to fail. The
+   two now race, and the sender is cancelled when the server ends the stream
+   first: ~2 s to fail instead of ~5 min.
+3. **ffmpeg was never shut down on the error path at all**, so its transport
+   was garbage-collected after the loop closed, printing the traceback that hid
+   the actual error message.
+
+`stop_ffmpeg()` now runs in a `finally`, drains both pipes before reaping, and
+bounds every step so a wedged decoder cannot outlive the probe.
+`tests/test_probe_shutdown.py` (6 tests) locks the drain-before-reap ordering
+and the timeouts; removing either guard fails them.
 
 ## Verified without Soniox
 
