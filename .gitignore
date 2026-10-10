@@ -16,4 +16,7 @@ __pycache__/
 
 # raw Soniox captures: verbatim transcripts of whatever was recorded.
 # Committing one is a deliberate act (git add -f), e.g. into tests/fixtures/.
+# The analyzer's markdown reports (docs/captures/*.md) quote the transcript too
+# and are tracked on purpose: they are the Phase 1 evidence. Same judgment
+# applies before making this repo public.
 docs/captures/*.jsonl

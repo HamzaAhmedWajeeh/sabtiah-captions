@@ -34,15 +34,23 @@ Then **open a new terminal** and confirm:
 `.env` must contain a real `SONIOX_API_KEY`. On Windows, confirm the file is
 `.env` and not `.env.txt` — Explorer hides known extensions.
 
-**3. The Soniox account has funds.** Checked on 2026-10-10 and it did not: all
-three runs below died on `organization_balance_exhausted` (HTTP 402) about
-180 ms after the config frame, before a single token. The key was fine — a bad
-key gives `unauthenticated`. Add funds or enable autopay in the console, and
-set the monthly budget cap while you are there (BUILD_SPEC section 8).
+**3. The Soniox account has funds, and the budget allows the run.** On
+2026-10-10 it did not: every run died on `organization_balance_exhausted`
+(HTTP 402) about 180 ms after the config frame, before a single token. Topped
+up and all three passes completed on 2026-10-11.
+
+Credit is $10 for the whole project (see CLAUDE.md). Three passes over a
+5-minute clip is 15 minutes of audio. Before re-running a capture that already
+exists, don't — replay the JSONL instead.
 
 A cheap way to confirm the account is live before committing to 15 minutes of
 streaming: run the first command, and if the first line of output is an
 `ERROR`, stop. The probe fails in about 2 seconds.
+
+**4. Expect one transient failure.** The first attempt on 2026-10-11 died with
+`TimeoutError: timed out during opening handshake` after 10 s; the immediate
+retry connected and ran clean. It costs nothing and leaves no capture behind,
+so just run the command again.
 
 ## Run
 

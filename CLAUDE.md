@@ -68,6 +68,26 @@ Full details in spec section 3; these are the ones that silently corrupt output:
 - 300-minute cap per stream; the spec rolls over proactively at 280 min.
 - Branch on `error_type`, never on `error_message`. Retryable vs. fatal classification is in Phase 5 and determines whether to back off or stop — a retry loop on `unauthenticated` is a bug.
 
+## Soniox budget: $10 total, and that is the whole project
+
+$10 of Soniox credit has to cover development, testing, rehearsal **and** the
+live demo on Saturday Oct 17, 2026. Every streamed second is spent money, so
+treat the API as the scarce resource it is.
+
+- **Never send audio to Soniox unless the task genuinely needs live API
+  behavior.** Caption logic, UI, broadcast, diffing and reconnect work all run
+  offline by replaying saved JSONL captures (`tests/fixtures/`,
+  `docs/captures/`) through a fake Soniox client. Build that replay mode in
+  Phase 2 or 3 so the full pipeline runs with no network at all.
+- **Default test clips are 1-5 minutes.** Ask Hamza before any run longer than
+  10 minutes of audio, and before re-running a capture that already exists -
+  re-running a capture we have is spending money to learn nothing.
+- **The stream must stop when the session stops**, and must never sit streaming
+  silence. Add an idle auto-stop: if audio stays below a silence threshold for
+  10 minutes, end the Soniox stream and show "paused" on `/admin`.
+- **Log audio seconds sent per run to `logs/usage.jsonl`**, and show the running
+  total - minutes and estimated $ - on the admin page.
+
 ## Security invariants
 
 - `SONIOX_API_KEY` lives only in `.env` on the laptop. Never in the browser, logs, or git. There is a test that greps served static files for `SONIOX`.
