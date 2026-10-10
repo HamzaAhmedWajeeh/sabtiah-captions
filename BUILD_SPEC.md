@@ -233,8 +233,10 @@ This is what makes or breaks the live demo. `app/soniox_client.py`:
 - Two tasks per connection: sender (audio queue -> binary frames) and receiver (responses -> CaptionState).
 - While capture is paused but the session is live, send `{"type":"keepalive"}` every 20 s.
 - On disconnect or error: classify by `error_type`.
-  - retryable (`service_unavailable`, `internal_error`, `request_timeout`, network errors, `max_duration_reached`): reconnect with backoff 0.5s, 1s, 2s, 4s, cap 8s.
-  - fatal (`unauthenticated`, `permission_denied`, `organization_balance_exhausted`, `*_budget_exhausted`, `invalid_request`): stop, show the error on admin, don't loop.
+  - retryable (`service_unavailable`, `internal_error`, `request_timeout`, network errors, `max_duration_reached`, `limit_exceeded`, `max_concurrent_connections_reached`): reconnect with backoff 0.5s, 1s, 2s, 4s, cap 8s.
+  - fatal (`unauthenticated`, `permission_denied`, `organization_balance_exhausted`, `*_budget_exhausted`, `invalid_request`, `model_not_available`, `temp_api_key_session_expired`): stop, show the error on admin, don't loop.
+
+  That is all 14 documented error types (verified against the API reference on 2026-10-10; see `docs/soniox-notes.md`). An unrecognized `error_type` is treated as retryable, but capped at 3 attempts so an unknown fatal error can't loop forever.
 - Audio ring buffer: keep the last 20 s of captured audio. On reconnect, send the audio captured since the last `final_audio_proc_ms` (capped at 20 s) before resuming live audio, so a short drop loses nothing.
 - Proactive rollover at 280 minutes of streamed audio: open a new connection, start sending, then close the old one gracefully with `""`.
 - On reconnect, finalize any open partial text in CaptionState (mark it final as-is) so the page doesn't show a stuck grey line.
