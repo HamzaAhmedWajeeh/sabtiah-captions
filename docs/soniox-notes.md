@@ -129,19 +129,58 @@ the segment's last word, and last translation token after the segment's last
 word. The third is the number that determines how far behind the speaker the
 translated caption actually runs.
 
+## The test recording
+
+Ten scripted sentences read by Hamza with 1–2 s pauses: 1–3 Saudi Arabic, 4–6
+English, 7–10 mixed Arabic with English tech terms. Expected at
+`recordings/test-sentences.m4a`.
+
+Hamza's note on interpreting it: his Arabic accent is not native Saudi, so
+Arabic accuracy from this recording is a **lower bound, not a verdict**. The
+run exists to learn how Soniox behaves, not to score it.
+
+| # | Category | Script |
+| --- | --- | --- |
+| 1 | Saudi Arabic | السلام عليكم، حياكم الله، اليوم بنتكلم عن كيف نبني نظام ذكاء اصطناعي يشتغل على بيانات الشركة. |
+| 2 | Saudi Arabic | أول شي لازم نفهم وش المشكلة اللي نبي نحلها، بعدين نختار الأداة المناسبة. |
+| 3 | Saudi Arabic | صراحة التجربة كانت صعبة شوي، بس تعلمنا منها أشياء كثير. |
+| 4 | English | Today I want to show you how we cut our inference costs in half. |
+| 5 | English | The main problem was latency, every request took around three seconds. |
+| 6 | English | If you have questions, feel free to ask at the end of the session. |
+| 7 | Mixed | اليوم بنشرح RAG and agentic workflows. |
+| 8 | Mixed | استخدمنا vector database عشان نخزن الـ embeddings حقت المستندات. |
+| 9 | Mixed | الـ agent يقرأ الطلب، وبعدين يسوي tool call ويرجع النتيجة للمستخدم. |
+| 10 | Mixed | سوينا fine-tuning على موديل صغير، والنتائج كانت أحسن من GPT بكثير في هالمهمة. |
+
+### Side-by-side results
+
+_Pending capture._ One row per sentence: what was said, what the transcript
+returned, what the translation returned, and a one-line judgment.
+
+### English technical terms in sentences 7–10
+
+_Pending capture._ For each term — RAG, vector database, embeddings, agent,
+tool call, fine-tuning, GPT — record whether it came back **kept in English**,
+**translated**, **transliterated** into Arabic script, or **garbled**, in the
+transcript and in the translation separately. These terms are the ones in
+`config/glossary.yaml`, so this run also measures whether the glossary context
+is doing anything.
+
 ## What is still needed
 
-1. **`SONIOX_API_KEY`.** `cp .env.example .env` and paste the key from the
-   Soniox console. While there, set a monthly budget cap (BUILD_SPEC section 8)
-   — budget-exhausted errors are handled as fatal, so a cap fails safe.
-2. **Audio.** Either a recording from a past Sabtiah session, or a phone
-   recording of ten sentences: 3 Saudi Arabic, 3 English, 4 mixed (Arabic with
-   English tech terms), including "اليوم بنشرح RAG and agentic workflows". Any
-   format — ffmpeg handles the decode. Speak at normal talk pace with a pause
-   between sentences so endpoint detection has something to find.
+Neither input is present as of the last check (2026-10-10): there is no `.env`
+file in the project root, and `recordings/` is empty.
 
-With both in place the capture, the analysis, and the rest of this document
-take a few minutes.
+1. **`SONIOX_API_KEY`.** `cp .env.example .env` and paste the key from the
+   Soniox console. On Windows, check the file is `.env` and not `.env.txt` —
+   Explorer hides the extension. While in the console, set a monthly budget cap
+   (BUILD_SPEC section 8); budget-exhausted errors are handled as fatal, so a
+   cap fails safe.
+2. **The recording** at `recordings/test-sentences.m4a`. Any format works —
+   ffmpeg handles the decode; only the path in the run sheet needs to match.
+
+With both in place, `docs/captures/RUN.md` is the command sequence, and filling
+in the rest of this document takes a few minutes.
 
 ## Verified without Soniox
 
