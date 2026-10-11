@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-**Phases 0, 1 and 2 are done. Phase 3 (server, broadcast, audience page) is next.**
+**Phases 0–3 are done. Phase 4 (live audio capture) is next.**
 
 - **Phase 1 is answered**, with five captures in `docs/captures/` and the findings in `docs/soniox-notes.md`. Read that file before touching caption logic — several of its measurements contradict assumptions in BUILD_SPEC section 3 and section 6.
-- **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. 69 tests, all offline. Build Phase 3 against `FakeSonioxClient` too — it paces a capture at real time, so the audience page can be judged at true speed.
+- **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. It paces a capture at real time, so the pages can be judged at true speed.
+- **Phase 3** is `app/broadcast.py` (viewer hub), `app/main.py` (routes, `/ws`, the replay session) and the three pages in `web/`. **145 tests, all offline.** Build Phase 4 and 5 against `FakeSonioxClient` too: `CaptionSession._run_replay` is the only place that knows where responses come from, so the mic and the real client are siblings of it.
 - **`docs/CHECKPOINT.md` is the short version**: what is done, what is next, the open items, and Soniox audio spent (**22.0 minutes** of the $10 budget so far).
 - Two findings matter most for the phases ahead. **Endpoint detection can effectively never fire** — `run4-saudi` gave one `<end>` in 300 s — so `<end>` is not a reliable paragraph break and `captions.py` adds a soft size break. And **nothing stays in Latin script in Arabic captions**: `RAG`/`MCP`/`LLM` get transliterated in the `en`→`ar` direction. The `translation_terms` fix in `config/glossary.yaml` is untested and is the highest-value remaining experiment.
 
@@ -41,6 +42,18 @@ uv run python tools/render_capture.py tests/fixtures/run1.jsonl --stats
 uv run python tools/render_capture.py tests/fixtures/run5-english.jsonl --lang ar
 uv run python tools/probe_soniox.py --analyze docs/captures/run1.jsonl
 ```
+
+Replay drives the whole server offline. With uvicorn running, start a session
+from the operator page (`/admin?token=<ADMIN_TOKEN>`) or directly:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/admin/start?token=<ADMIN_TOKEN>&capture=run1.jsonl&paced=true"
+curl -X POST "http://127.0.0.1:8000/admin/stop?token=<ADMIN_TOKEN>"
+```
+
+`paced=true` replays at real time (judge the page at true speed, caption lag
+included); `paced=false` pushes a whole capture through in under a second,
+which is the quick way to fill the page or stress the broadcast throttle.
 
 Only `probe_soniox.py --file` and `eval_run.py` cost money. Everything else, including the whole test suite, runs off saved captures.
 

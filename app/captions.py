@@ -186,10 +186,18 @@ class CaptionState:
         }
 
     def diff_since(self, seq: int) -> dict:
-        """Only the paragraphs that changed after `seq`, keyed by `id`."""
+        """Only the paragraphs that changed after `seq`, keyed by `id`.
+
+        `base` is the sequence number this diff was computed *from*, which is
+        what makes BUILD_SPEC's "a client that sees a `seq` gap requests a
+        full snapshot" implementable: without it a client can see that a diff
+        is newer than its own state but not whether anything fell out in
+        between. A client resyncs when `base > its own seq`.
+        """
         return {
             "type": "diff",
             "seq": self.seq,
+            "base": seq,
             "live": self.live,
             "streams": {
                 lang: [p.as_dict() for p in paras if p.changed_seq > seq]

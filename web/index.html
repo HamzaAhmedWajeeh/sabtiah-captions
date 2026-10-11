@@ -2,17 +2,46 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="noindex">
   <title>Sabtiah Live Captions</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- `display=swap`, so a slow venue network delays the Arabic typeface but
+       never the captions: the system fallback paints immediately. -->
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500&display=swap">
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body data-page="audience">
   <header>
-    <h1>Sabtiah Live Captions</h1>
-    <p class="disclaimer">Live auto-translation. May contain mistakes.</p>
+    <div class="title-row">
+      <h1>Sabtiah Live Captions</h1>
+      <span id="state" class="connecting">connecting</span>
+    </div>
+    <p class="disclaimer" id="disclaimer">Live auto-translation. May contain mistakes.</p>
+    <div class="controls">
+      <button type="button" id="view-en" data-view="en" aria-pressed="false">English</button>
+      <button type="button" id="view-ar" data-view="ar" aria-pressed="false" lang="ar">العربية</button>
+      <button type="button" id="view-both" data-view="both" aria-pressed="false">Both</button>
+      <span class="sizer">
+        <button type="button" id="smaller" aria-label="Smaller text">A&minus;</button>
+        <button type="button" id="bigger" aria-label="Larger text">A+</button>
+      </span>
+    </div>
   </header>
-  <main id="captions">
-    <p class="status">Not wired up yet — captions arrive in Phase 3.</p>
+
+  <main id="streams">
+    <!-- One scroll container per language. Both are present in the DOM at all
+         times and only hidden, so switching view keeps each one's scroll
+         position and no caption has to be re-applied. -->
+    <section class="stream" id="stream-en" dir="ltr" lang="en" hidden></section>
+    <section class="stream" id="stream-ar" dir="rtl" lang="ar" hidden></section>
   </main>
+
+  <button type="button" id="jump" hidden>Jump to live</button>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 # Checkpoint — 2026-10-11
 
-Six days to the demo (Saturday Oct 17). Phases 0–2 done, Phase 3 next.
+Six days to the demo (Saturday Oct 17). Phases 0–3 done, Phase 4 next.
 
 ## Done
 
@@ -12,61 +12,102 @@ Six days to the demo (Saturday Oct 17). Phases 0–2 done, Phase 3 next.
 - **Phase 2** — `app/captions.py` (pure, Option B, two per-language streams)
   and `app/replay.py` (`FakeSonioxClient` over saved JSONL).
   `tools/render_capture.py` renders a capture as the audience would see it.
+- **Phase 3** — `app/broadcast.py` (viewer hub), `app/main.py` (routes, the
+  socket, and the replay session), and the three pages: `web/index.html` +
+  `app.js`, `web/screen.html` + `screen.js`, `web/admin.html` + `admin.js`,
+  all on one `style.css`. Driven entirely by `FakeSonioxClient`.
 
-**69 tests green, all offline** — 53 captions, 10 probe analyzer, 6 probe
-shutdown. No test touches the network.
+**145 tests green, all offline** — 69 from Phase 2, 28 broadcast, 48 server.
+No test touches the network.
 
-## Soniox audio spent: 22.0 minutes
+## Soniox audio spent: 22.0 minutes — unchanged
 
-300.01 s × 4 (run1, run2, run3, run4) + 120.0 s (run5). Failed attempts sent
-~0.2 s each and are noise. Credit is $10 for the whole project; Phase 2 cost
-nothing and Phase 3 should cost nothing.
+Phase 3 cost nothing and **structurally cannot**: no module it added can open
+an outbound connection. Every check below ran off saved captures.
 
-## Next: Phase 3
+## Next: Phase 4 — live audio capture
 
-Server, broadcast, audience page — `app/main.py`, `app/broadcast.py`,
-`web/index.html` + `app.js` + `style.css`, plus `/screen` and `/admin`.
-Build it entirely against `FakeSonioxClient`; `replay.py` already paces a
-capture at real time (`paced=True`) so the page can be judged at true speed,
-caption lag included.
+`app/audio_source.py` (`MicSource`, `FileSource`), `tools/list_devices.py`,
+the RMS level meter for the admin page, and optional `--record`. This is the
+first phase that needs the USB interface plugged in.
 
-Two contract details `captions.py` documents and the hub must respect:
+Phase 3 left the seam ready: `CaptionSession._run_replay` in `app/main.py` is
+the only thing that knows where responses come from. Phase 4 adds a sibling
+`_run_mic`, and Phase 5 swaps `FakeSonioxClient` for the real client behind
+the same `start`/`stop`/`status`.
 
-- Paragraph ids are **globally unique, not aligned across streams** — the two
-  languages break at different points under Option B.
-- **Trimming is invisible in a diff.** A client must treat a snapshot as
-  authoritative and drop any id missing from it.
+## What Phase 3 verified, and how
+
+Acceptance was checked against a running server, not just unit tests.
+
+- Three viewers at once (two audience pages + `/screen`), one real-time
+  replay of `run1`: `viewers 3, rejected 0, dropped 0`, and
+  `audio_ms 61600` at `elapsed 61.6 s` — paced replay tracks real time exactly.
+- `run4-saudi` pushed through unpaced: **1,658 responses, 1,644 state changes,
+  three live viewers, nothing dropped, no console errors.** Its single
+  endpoint-free 3,974-character segment rendered as 11 Arabic paragraphs
+  (longest 365 chars), so the soft size break works end to end.
+- Toggles, A−/A+, scroll-back and "Jump to live" all work; view and text size
+  persist in localStorage. No horizontal overflow.
+- **Kill and restart the server**: pages go to `reconnecting`, keep showing
+  the last captions, reconnect on their own, and resync — the stale paragraphs
+  are dropped because a snapshot is authoritative.
+- Route checks: `/static/admin.html` is 404, `/admin` is 401 with no token,
+  with a wrong token, and with an **unset** `ADMIN_TOKEN`.
+
+## Two deliberate deviations from BUILD_SPEC
+
+1. **A diff now carries `base`**, the sequence number it was computed from
+   (`captions.py: diff_since`). The spec says a client that "sees a `seq` gap"
+   should resync, but without `base` a client can tell a diff is newer than
+   its state and *not* whether anything fell out in between. `base > my seq`
+   is the loss test; `tests/test_broadcast.py` proves diffs are contiguous.
+2. **The audience page does not use `dir="auto"`.** The spec suggests it for
+   mixed content. `dir="auto"` takes a paragraph's base direction from its
+   first strong character, so an Arabic caption beginning `RAG يعني...` would
+   lay out left-to-right — and a caption starting with a Latin technical term
+   is exactly what `config/glossary.yaml` is meant to produce. Each stream
+   declares its own base direction instead and the bidi algorithm places
+   embedded Latin runs correctly. Confirmed on screen: `to fold one protein`
+   renders LTR inside an RTL Arabic paragraph.
 
 ## Open items
 
-1. **`translation_terms` is untested, and it is the highest-value experiment
-   left.** In the `en`→`ar` direction *nothing* stays in Latin script — zero
-   Latin runs survived into the Arabic captions, so `RAG`/`MCP`/`LLM` will be
-   transliterated and near-unreadable for the demo audience.
-   `config/glossary.yaml` already carries the intended fix. Needs ~60 s of
-   English containing the glossary terms. Until then, treat Latin-script
-   preservation in Arabic captions as **not working**.
-2. **Saudi dialect is still unmeasured.** `recordings/saudi-5min.m4a` turned
-   out to be MSA news register about Yemen with zero distinctively Saudi lexis,
-   so it answers nothing. Needs casual Saudi conversation, not broadcast. The
-   audience is Saudi; the only dialect actually measured is Egyptian.
-3. **Live microphone capture untested.** Every capture came through ffmpeg from
-   a file. `MicSource` and the `sounddevice` callback are Phase 4.
+1. **`translation_terms` is still untested, and still the highest-value
+   experiment left.** It needs ~60 s of English containing the glossary terms.
+   `recordings/terms-1min.m4a` **does not exist yet** — the one pass requested
+   on 2026-10-11 could not run. The only English audio on disk is the Rogan
+   cut, and `docs/soniox-notes.md` records that it contains none of the terms,
+   so streaming it would spend credit to learn nothing. Until the clip exists,
+   treat Latin-script preservation in Arabic captions as **not working**:
+   `RAG`/`MCP`/`LLM` will be transliterated.
+2. **Saudi dialect is still unmeasured.** `recordings/saudi-5min.m4a` is MSA
+   news register about Yemen with zero distinctively Saudi lexis. Needs casual
+   Saudi conversation. The audience is Saudi; the only dialect measured is
+   Egyptian.
+3. **Live microphone capture untested** — every capture came through ffmpeg
+   from a file. That is Phase 4.
 4. **Long sessions untested.** The 300-minute cap, the 280-minute rollover and
-   the 20 s keepalive have never run — audio flowed continuously, so no
-   keepalive was ever needed.
+   the 20 s keepalive have never run.
 5. **`config/session.yaml` is empty.** Filling `speakers` would likely have
    fixed `جودت` → "Goudat" in run1. Cheap win, no API cost.
+6. **Phone browsers untested.** Everything above was checked in Chrome on the
+   laptop. The spec wants iOS Safari and Android Chrome at 360 px, and
+   "3 phones on the same Wi-Fi" needs the Phase 8 tunnel or a LAN bind.
 
 ## Half-finished
 
-Nothing in the code. One loose end worth knowing:
+Nothing in the code. Two loose ends worth knowing:
 
 - **Some Phase 1 numbers are not reproducible from the repo.** The committed
-  `tools/probe_soniox.py --analyze` covers the five questions, but the
-  per-distinct-token delay figures, the attribution-free `<end>` check and the
-  word-boundary dialect counts came from throwaway scripts in a session
-  scratchpad that is **not** in git. The conclusions are recorded in
-  `docs/soniox-notes.md` with their inputs, but re-deriving them means
-  rewriting those scripts. Folding them into `tools/` as an `--analyze2` or a
-  second tool would fix it; not done, and not required by the spec.
+  `--analyze` covers the five questions, but the per-distinct-token delay
+  figures, the attribution-free `<end>` check and the word-boundary dialect
+  counts came from throwaway scripts in a scratchpad that is **not** in git.
+  The conclusions are in `docs/soniox-notes.md` with their inputs; re-deriving
+  them means rewriting those scripts.
+- **One cosmetic traceback on Windows.** An abrupt client disconnect can print
+  `ConnectionResetError: [WinError 10054]` from asyncio's own
+  `_ProactorBasePipeTransport._call_connection_lost`. It fired once across a
+  session of repeated reloads, is inside asyncio rather than this code, and
+  the server kept serving. Worth recognising on run day so it is not mistaken
+  for a fault; silencing it is not worth a code change.

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="noindex">
+  <title>Sabtiah Captions — operator</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<!-- Never linked from the audience page (BUILD_SPEC section 8). Reached only
+     with the operator token in the query string; every endpoint below
+     re-checks it, so this page carries no authority of its own.
+     Phase 3 scope: start and stop a replayed capture, and watch the hub.
+     Phase 6 adds the input device, session context, and the log/record and
+     translation-direction toggles. -->
+<body class="admin" data-page="admin">
+  <h1>Sabtiah Live Captions — operator</h1>
+
+  <fieldset>
+    <legend>Session (replay)</legend>
+    <div class="row">
+      <label>Capture
+        <select id="capture"></select>
+      </label>
+      <label>
+        <input type="checkbox" id="paced" checked>
+        Real time
+      </label>
+      <button type="button" id="start" class="primary">Start</button>
+      <button type="button" id="stop">Stop</button>
+    </div>
+    <p class="note" id="hint">
+      Replay costs no API credit. Live audio arrives in Phase 4.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Status</legend>
+    <table>
+      <tbody>
+        <tr><th>Session</th><td id="s-running">—</td></tr>
+        <tr><th>Source</th><td id="s-source">—</td></tr>
+        <tr><th>Elapsed</th><td id="s-elapsed">—</td></tr>
+        <tr><th>Audio position</th><td id="s-audio">—</td></tr>
+        <tr><th>Responses</th><td id="s-responses">—</td></tr>
+        <tr><th>Sequence</th><td id="s-seq">—</td></tr>
+        <tr><th>Viewers</th><td id="s-viewers">—</td></tr>
+        <tr><th>Refused / dropped</th><td id="s-shed">—</td></tr>
+        <tr><th>Last error</th><td id="s-error">—</td></tr>
+      </tbody>
+    </table>
+  </fieldset>
+
+  <script src="/static/admin.js"></script>
+</body>
+</html>

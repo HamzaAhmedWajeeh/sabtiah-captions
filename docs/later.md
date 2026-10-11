@@ -16,3 +16,13 @@ BUILD_SPEC.md.
   different points.
 - `tools/render_capture.py` could diff two renderings of the same capture under
   different `--max-chars`, to tune the soft paragraph break without guessing.
+
+- `/screen` sizes text with a fixed `min(5.5vw, 9vh)` and `lines` counts
+  *paragraphs*, so a 360-character paragraph fills more than one screenful and
+  the top is masked off. Fitting the last N paragraphs to the frame (binary
+  search on font size, or a per-paragraph character budget for this view) would
+  make `lines=2` mean what it looks like it means. Tune `lines` by eye at
+  rehearsal instead, for now.
+- The audience page has no way to see the other language for a single
+  paragraph without switching views. A tap-to-reveal on one paragraph would
+  need the cross-stream pairing that `captions.py` deliberately does not do.
