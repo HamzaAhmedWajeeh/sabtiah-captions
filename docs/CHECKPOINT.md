@@ -359,6 +359,21 @@ and three phones at once.
    `config/glossary.yaml` is meant to produce. Each stream declares its own
    base direction instead.
 
+## Go-live checklist
+
+One-off items for the first public session, as distinct from the per-session
+checklist in README.md.
+
+- [ ] **Rotate `ADMIN_TOKEN` in `.env`, restart, update bookmark.** Decided
+      2026-10-13: keep the current token through development and rotate once
+      Sabtiah agrees and before the tunnel is public. The one in use has been
+      through a week of development and has appeared in terminal output, so
+      the public session should start on a fresh one. Generate it as at setup,
+      restart so it is read, and fix the `/admin` bookmark on the laptop.
+
+This list will grow with Phase 8 — the public tunnel, the QR code, and
+whatever the venue turns out to need.
+
 ## Open items
 
 1. **A short live re-run is owed**, to confirm the run7 fixes: the ring now

@@ -172,6 +172,17 @@ Run the tests — **all 393 are offline**, none touches the network:
 uv run pytest
 ```
 
+## Before going live
+
+One-off, for the first public session — not every time.
+
+- [ ] **Rotate `ADMIN_TOKEN` in `.env`, restart, update bookmark.** The
+      current one has been used during development; the public session should
+      start on a fresh one. Generate it the same way as at setup, restart the
+      server so it is read, and fix the `/admin` bookmark on the laptop.
+
+More will land here with the public tunnel and the QR code.
+
 ## Before a session
 
 - [ ] Laptop **charged** and plugged in.
