@@ -55,12 +55,29 @@ Phase 5 and the caption fix. No test touches the network: `SonioxClient` takes
 its `connect` as an argument and imports `websockets` lazily, so no test can
 dial Soniox even by accident.
 
-## Soniox audio spent: 27.7 minutes
+## Soniox spent: 27.7 minutes, about 8 cents
 
-22.0 from Phase 1, **1.36 from run6**, **2.88 from run7**, **1.48 from run8**. The ledger in
-`logs/usage.jsonl` is the record; `/admin` shows the running total. Still no
-dollar figure, because the per-minute rate has never been written down (open
-item 2).
+22.0 from Phase 1, **1.36 from run6**, **2.88 from run7**, **1.48 from run8**.
+The ledger in `logs/usage.jsonl` is the record; `/admin` shows the running
+total.
+
+**The rate is now known** — soniox.com/pricing, checked 2026-10-13: about
+**$0.18 per hour** with two-way translation ($2 per million audio tokens,
+$4 per million text tokens, roughly 30k of each per hour). That is **$0.003 a
+minute**, so the $10 covers about **55 hours**.
+
+Everything streamed to date therefore cost **about 8 cents, 0.8% of the
+budget**. The project has been run all week as though credit were the binding
+constraint; it never was. The rules in CLAUDE.md are updated:
+
+- Replay stays the default for development, for speed and determinism rather
+  than cost.
+- **Live runs up to 60 minutes no longer need asking** — an hour is $0.18.
+- The idle auto-stop and the usage ledger both stay. A session left connected
+  overnight is now the only realistic way to spend real money by accident,
+  which is exactly what the auto-stop is for.
+
+Set `SONIOX_RATE_PER_MINUTE=0.003` in `.env` and `/admin` shows dollars.
 
 ## The two live runs
 
@@ -366,11 +383,11 @@ and three phones at once.
    do not obey it are `agents` and `AI`, and they are open item 1, not this
    one.
 
-4. **The per-minute Soniox rate is not recorded anywhere**, so `/admin` shows
-   counted minutes and no dollar figure. `app/usage.py` will show dollars as
-   soon as `SONIOX_RATE_PER_MINUTE` is set in `.env` — one number from the
-   Soniox console turns it on. Deliberately not guessed: a made-up rate
-   printed to two decimal places reads as a measurement.
+4. ~~**The per-minute rate is not recorded anywhere**~~ — **answered
+   2026-10-13**: $0.18/hour, $0.003/minute, from soniox.com/pricing. Put
+   `SONIOX_RATE_PER_MINUTE=0.003` in `.env` to turn the dollar figures on;
+   it is in `.env.example` with the source beside it. The budget rules above
+   and in CLAUDE.md are rewritten around it.
 5. **Acceptance 3 and 4 are still unrun.** The invalid-key check needs one
    short live start; the 60-minute soak needs no credit at all and has not
    been done.

@@ -221,13 +221,19 @@ Something is already on port 8000, usually an older copy of this server:
 
 ## Costs
 
-Soniox bills **per minute of audio streamed**, so only live sessions cost
-anything. Replay, the tests, the level meter and the file tools are all free —
-nothing in them can open a connection.
+Only live sessions cost anything. Replay, the tests, the level meter and the
+file tools are all free — nothing in them can open a connection.
+
+**About $0.18 an hour**, or $0.003 a minute, with two-way translation — so the
+$10 of credit is roughly 55 hours. A full talk costs a few cents. (Source:
+soniox.com/pricing, checked 2026-10-13; the rate is in `.env.example`.)
 
 Audio re-sent after a reconnect is billed again, so a flaky network costs a
 little more than the talk's length.
 
 Every run is logged to `logs/usage.jsonl`, and `/admin` shows the running
-total. Set `SONIOX_RATE_PER_MINUTE` in `.env` to see an estimate in dollars;
-without it the page shows minutes only, which are counted rather than guessed.
+total with dollars once `SONIOX_RATE_PER_MINUTE` is set in `.env`.
+
+The thing worth watching is not running out, it is a session left connected
+to an empty room. Ten minutes below the silence threshold stops the stream on
+its own and shows "paused".

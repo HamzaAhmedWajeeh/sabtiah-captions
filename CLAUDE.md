@@ -6,15 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Phases 0–5 are done, and Phase 6's session context is done early. The rest of Phase 6 (logging toggles, translation direction, clear-captions) is next.**
 
-**No live run has ever happened.** Phase 5 is tested end to end against a scripted socket; the four acceptance checks in `docs/resilience-test.md` have their offline halves done and their live halves outstanding. Ask Hamza before the first live run.
+**Three live runs have happened** (run6, run7, run8 on 2026-10-13; write-ups in `docs/live/`). Acceptance checks 1 and 2 in `docs/resilience-test.md` now pass live; 3 and 4 are still unrun. Live runs up to 60 minutes no longer need asking — see the budget section.
 
 - **Phase 1 is answered**, with five captures in `docs/captures/` and the findings in `docs/soniox-notes.md`. Read that file before touching caption logic — several of its measurements contradict assumptions in BUILD_SPEC section 3 and section 6.
 - **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. It paces a capture at real time, so the pages can be judged at true speed.
 - **Phase 3** is `app/broadcast.py` (viewer hub), `app/main.py` (routes, `/ws`, the replay session) and the three pages in `web/`.
 - **Phase 4** is `app/audio_source.py` (`MicSource`, `FileSource`), `tools/list_devices.py`, the admin level meter and `app/usage.py` (the `logs/usage.jsonl` spend ledger).
 - **Phase 5** is `app/soniox_client.py`: ring buffer, backoff, error classification, keepalive, rollover, idle auto-stop. It takes its `connect` as an argument and imports `websockets` lazily, so no test can reach Soniox even by accident. Keep it that way.
-- **Session context (Phase 6, early)** is editable from `/admin` at runtime: save writes `config/session.yaml` atomically, and "Apply now" reconnects through the rollover path so a mid-talk change costs no audio and shows the audience nothing. **393 tests, all offline.**
-- **`docs/CHECKPOINT.md` is the short version**: what is done, what is next, the open items, and Soniox audio spent (**22.0 minutes** of the $10 budget so far).
+- **Session context (Phase 6, early)** is editable from `/admin` at runtime: save writes `config/session.yaml` atomically, and "Apply now" reconnects through the rollover path so a mid-talk change costs no audio and shows the audience nothing. **426 tests, all offline.**
+- **`docs/CHECKPOINT.md` is the short version**: what is done, what is next, the open items, and Soniox audio spent (**27.7 minutes** so far, about 8 cents of the $10 — see the budget section).
 - Two findings matter most for the phases ahead. **Endpoint detection can effectively never fire** — `run4-saudi` gave one `<end>` in 300 s — so `<end>` is not a reliable paragraph break and `captions.py` adds a soft size break. And **nothing stays in Latin script in Arabic captions**: `RAG`/`MCP`/`LLM` get transliterated in the `en`→`ar` direction. The `translation_terms` fix in `config/glossary.yaml` is untested and is the highest-value remaining experiment.
 
 ## BUILD_SPEC.md is the contract
@@ -39,8 +39,8 @@ uv run uvicorn app.main:app --reload             # dev server, port 8000
 uv run pytest                                    # all tests
 uv run pytest tests/test_captions.py::test_name  # single test
 uv run python tools/list_devices.py              # audio input devices (Phase 4)
-uv run python tools/probe_soniox.py --file <audio> --out <path.jsonl>   # Phase 1, SPENDS CREDIT
-uv run python tools/eval_run.py --engine soniox --clips clips/          # Phase 7, SPENDS CREDIT
+uv run python tools/probe_soniox.py --file <audio> --out <path.jsonl>   # streams audio, ~$0.003/min
+uv run python tools/eval_run.py --engine soniox --clips clips/          # streams audio, ~$0.003/min
 
 # offline: replay a capture through CaptionState, no Soniox calls
 uv run python tools/render_capture.py tests/fixtures/run1.jsonl --stats
@@ -60,7 +60,7 @@ curl -X POST "http://127.0.0.1:8000/admin/stop?token=<ADMIN_TOKEN>"
 included); `paced=false` pushes a whole capture through in under a second,
 which is the quick way to fill the page or stress the broadcast throttle.
 
-Only `probe_soniox.py --file` and `eval_run.py` cost money. Everything else, including the whole test suite, runs off saved captures.
+Only `probe_soniox.py --file`, `eval_run.py` and a live session from `/admin` reach Soniox at all. Everything else, including the whole test suite, runs off saved captures. At $0.003 a minute none of it is expensive; the reason to prefer replay is speed and determinism, not cost.
 
 Windows is the primary dev machine; `scripts/start.ps1` / `scripts/start.sh` (Phase 8) launch uvicorn + cloudflared together.
 
@@ -99,25 +99,37 @@ Full details in spec section 3; these are the ones that silently corrupt output:
 - 300-minute cap per stream; the spec rolls over proactively at 280 min.
 - Branch on `error_type`, never on `error_message`. Retryable vs. fatal classification is in Phase 5 and determines whether to back off or stop — a retry loop on `unauthenticated` is a bug.
 
-## Soniox budget: $10 total, and that is the whole project
+## Soniox budget: $10, and it is not the constraint it looked like
 
-$10 of Soniox credit has to cover development, testing, rehearsal **and** the
-live demo on Saturday Oct 17, 2026. Every streamed second is spent money, so
-treat the API as the scarce resource it is.
+**Rate checked on soniox.com/pricing, 2026-10-13: about $0.18 per hour** with
+two-way translation — $2 per million audio tokens and $4 per million text
+tokens, at roughly 30k of each per hour. That is **$0.003 a minute**, so the
+$10 covers about **55 hours** of streaming.
 
-- **Never send audio to Soniox unless the task genuinely needs live API
-  behavior.** Caption logic, UI, broadcast, diffing and reconnect work all run
-  offline by replaying saved JSONL captures (`tests/fixtures/`,
-  `docs/captures/`) through a fake Soniox client. Build that replay mode in
-  Phase 2 or 3 so the full pipeline runs with no network at all.
-- **Default test clips are 1-5 minutes.** Ask Hamza before any run longer than
-  10 minutes of audio, and before re-running a capture that already exists -
-  re-running a capture we have is spending money to learn nothing.
-- **The stream must stop when the session stops**, and must never sit streaming
-  silence. Add an idle auto-stop: if audio stays below a silence threshold for
-  10 minutes, end the Soniox stream and show "paused" on `/admin`.
-- **Log audio seconds sent per run to `logs/usage.jsonl`**, and show the running
-  total - minutes and estimated $ - on the admin page.
+For scale: everything this project has streamed to date is 27.7 minutes, which
+cost **about 8 cents**. The earlier rules in this file were written before the
+rate was known and assumed the budget was tight. It is not.
+
+- **Replay is still the default for development.** Caption logic, UI,
+  broadcast, diffing and reconnect work all run offline by replaying saved
+  JSONL captures (`tests/fixtures/`, `docs/captures/`) through
+  `replay.FakeSonioxClient`. That is not about money any more — it is about
+  tests that are fast, deterministic and runnable on a train. A test that
+  needs the network is a worse test.
+- **Live runs up to 60 minutes are fine without asking.** An hour costs $0.18,
+  1.8% of the budget. Ask before anything longer, and still ask before
+  re-running a capture that already exists — not because of the cost, but
+  because it spends time to learn nothing.
+- **The stream must stop when the session stops**, and must never sit
+  streaming silence. The idle auto-stop stays: ten minutes below the silence
+  threshold ends the stream and shows "paused" on `/admin`. It is cheap
+  insurance against a session left open overnight, which is the one way left
+  to spend real money by accident.
+- **Keep logging audio seconds per run to `logs/usage.jsonl`**, and keep the
+  running total on the admin page. The number to watch is no longer "are we
+  about to run out" but "did something stay connected when nobody was
+  talking".
+- `SONIOX_RATE_PER_MINUTE=0.003` in `.env` turns the dollar figures on.
 
 ## Security invariants
 
