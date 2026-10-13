@@ -124,7 +124,13 @@ h1 {
 
 /* -- streams ------------------------------------------------------------ */
 
-main {
+/* Everything except the operator page - so the audience page and the big
+   screen, both of which use `main` for their stream columns. The background
+   here is the hairline between the two columns in "Both": a 1px grid gap
+   with the line colour showing through. Unscoped, it also painted the
+   operator page's grid, which is why the area around those cards looked a
+   shade lighter than the page itself. */
+body:not(.admin) main {
   flex: 1;
   min-height: 0;
   display: grid;
@@ -402,6 +408,9 @@ body.admin textarea {
   border-radius: 6px;
   padding: 0.4rem 0.7rem;
   min-height: 2.2rem;
+  /* A long device name used to push the select past the edge of its card on
+     a phone. Nothing here may be wider than what contains it. */
+  max-width: 100%;
 }
 
 body.admin input[type="number"] { width: 4.5rem; }
@@ -470,6 +479,16 @@ body.admin .banner {
 body.admin .banner.page { color: #f87171; border: 1px solid #f87171; }
 body.admin .banner.engine { background: #7f1d1d; color: #fff; }
 
+/* The advice sits on its own line under the error, not trailing off the end
+   of it: it is a separate thought, and the one an operator can act on. */
+body.admin #error-advice {
+  display: block;
+  font-weight: 400;
+  margin-top: 0.15rem;
+}
+
+body.admin #error-advice[hidden] { display: none !important; }
+
 /* The "saved but not applied" state during a live run. It has to be
    impossible to walk past. */
 body.admin .applybar {
@@ -514,7 +533,19 @@ body.admin .meter {
 body.admin .meter-fill {
   height: 100%;
   width: 0;
-  background: linear-gradient(90deg, #4ade80 0%, #4ade80 70%, #fbbf24 100%);
+  /* Hard stops aligned to the marks drawn on the bar: green all the way
+     through the good band (which ends at 66.7%), amber in the gap between
+     the band and the clip zone, red once inside it (91.7%). The colour of
+     the bar's end is then the answer on its own, without reading a number. */
+  background: linear-gradient(90deg,
+    #4ade80 0%, #4ade80 66.7%,
+    #fbbf24 66.7%, #fbbf24 91.7%,
+    #f87171 91.7%, #f87171 100%);
+  /* `background-size` is set from JavaScript to the inverse of the fill
+     fraction, so the gradient always spans the whole track rather than being
+     squeezed into whatever width the fill currently has. Without that, the
+     colour at the end of the bar would depend on the level twice over. */
+  background-repeat: no-repeat;
   transition: width 120ms linear;
 }
 
@@ -551,7 +582,12 @@ body.admin .meter-label {
   position: absolute;
   z-index: 3;
   font-weight: 700;
-  text-shadow: 0 1px 2px #000;
+  /* A dark chip, not just a text shadow: these labels sit wherever the fill
+     happens to reach, and green-on-green was unreadable exactly when the
+     level was in the band the label is pointing at. */
+  background: rgba(0, 0, 0, 0.62);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
   top: 0.25rem;
   font-size: 0.62rem;
   letter-spacing: 0.06em;
@@ -563,11 +599,43 @@ body.admin .meter-label {
 body.admin .meter-label.good { left: 51%; color: #4ade80; }
 body.admin .meter-label.clip { left: 92.7%; color: #f87171; }
 
-/* The words do not fit beside each other on a phone; the coloured bands
-   still say where to aim. */
+/* Phone width. Two things change: the meter labels drop out (the coloured
+   bands still say where to aim), and every label moves above its field
+   instead of beside it - side by side, "What to run" wrapped onto three
+   lines and left the select a sliver. */
 @media (max-width: 34rem) {
   body.admin .meter-label { display: none; }
   body.admin .meter { height: 2.2rem; }
+
+  body.admin .row { gap: 0.8rem; }
+
+  body.admin .row > label {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+    flex: 1 1 100%;
+    color: var(--dim);
+    font-size: 0.78rem;
+  }
+
+  /* ...except a checkbox, where the label *is* the sentence and belongs
+     beside the box. */
+  body.admin .row > label:has(input[type="checkbox"]) {
+    flex-direction: row;
+    align-items: center;
+    color: inherit;
+    font-size: inherit;
+  }
+
+  body.admin .row > label > select,
+  body.admin .row > label > input[type="text"],
+  body.admin .row > label > input[type="number"] {
+    width: 100%;
+  }
+
+  body.admin .topbar { gap: 0.75rem 1rem; }
+  body.admin .topstats { gap: 1rem; }
 }
 
 body.admin .meterline {

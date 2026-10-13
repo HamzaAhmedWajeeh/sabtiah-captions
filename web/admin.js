@@ -62,12 +62,15 @@
     responseLog: document.getElementById('s-capture'),
     engine: document.getElementById('s-engine'),
     lag: document.getElementById('s-lag'),
-    retries: document.getElementById('s-retries'),
+    reconnects: document.getElementById('s-reconnects'),
+    rollovers: document.getElementById('s-rollovers'),
     lost: document.getElementById('s-lost'),
     silence: document.getElementById('s-silence'),
     thisRun: document.getElementById('s-this-run'),
     error: document.getElementById('s-error'),
     errorBanner: document.getElementById('error-banner'),
+    errorText: document.getElementById('error-text'),
+    errorAdvice: document.getElementById('error-advice'),
     statusHeading: document.getElementById('status-heading'),
     statusNote: document.getElementById('status-note'),
     statusCard: document.getElementById('status-card'),
@@ -75,6 +78,7 @@
     cost: document.getElementById('s-cost'),
     left: document.getElementById('s-left'),
     spendFill: document.getElementById('spend-fill'),
+    spendBar: document.getElementById('spend-bar'),
     spendNote: document.getElementById('spend-note'),
     spendCard: document.getElementById('spend-card'),
     free: document.getElementById('s-free'),
@@ -173,6 +177,12 @@
     return ok(a) && ok(b) ? a + ' / ' + b : '—';
   }
 
+  /* "1 speaker", "2 speakers". Worth the four lines: a status line that says
+   * "1 speakers" reads as a page nobody checked. */
+  function plural(count, one, many) {
+    return count + ' ' + (count === 1 ? one : (many || one + 's'));
+  }
+
   function num(value, digits, suffix) {
     if (typeof value !== 'number' || !isFinite(value)) { return '—'; }
     return value.toFixed(digits) + (suffix || '');
@@ -200,7 +210,6 @@
   function renderMeter(level) {
     if (!level) {
       els.meterFill.style.width = '0%';
-      els.meterFill.className = 'meter-fill';
       els.level.textContent = '—';
       els.clip.hidden = true;
       return;
@@ -208,7 +217,11 @@
     var db = level.db;
     var fraction = Math.max(0, Math.min(1, (db - FLOOR_DB) / -FLOOR_DB));
     els.meterFill.style.width = (fraction * 100).toFixed(1) + '%';
-    els.meterFill.className = 'meter-fill' + (level.peak >= 0.9 ? ' hot' : '');
+    /* Stretch the gradient back out to the width of the whole track, so its
+     * colour stops stay lined up with the marks painted on the bar. Green
+     * through the good band, amber past it, red inside the clip zone. */
+    els.meterFill.style.backgroundSize =
+      (100 / Math.max(fraction, 0.001)).toFixed(2) + '% 100%';
     els.level.textContent = db.toFixed(1) + ' dB  (peak ' +
       level.peak_db.toFixed(1) + ')';
     els.clip.hidden = !level.clipping;
@@ -239,10 +252,12 @@
       text(els.cost, null);
       text(els.left, null);
       els.spendFill.style.width = '0%';
+      els.spendBar.hidden = true;
       text(els.spendNote,
         'Set the per-minute rate in .env to see dollars.');
     } else {
       text(els.cost, '$' + used.toFixed(2));
+      els.spendBar.hidden = false;
       if (budget) {
         var left = budget - used;
         text(els.left, '$' + left.toFixed(2));
@@ -264,10 +279,19 @@
   }
 
   /* Rows whose value is only an em dash are noise while nothing is running.
-   * Hidden rather than removed so they come straight back when a run starts. */
-  function tidyRows(running) {
-    var rows = els.statusCard.querySelectorAll('tr[data-row]');
+   * Hidden rather than removed so they come straight back when a run starts.
+   *
+   * The Connection group goes as a block when there is no engine at all: a
+   * replay transcribes nothing, so "caption delay" and "reconnects" are not
+   * blank, they are meaningless. */
+  function tidyRows(running, hasEngine) {
+    var rows = els.statusCard.querySelectorAll('tr[data-row], tr.group');
     Array.prototype.forEach.call(rows, function (row) {
+      if (row.getAttribute('data-group') === 'connection' && !hasEngine) {
+        row.hidden = true;
+        return;
+      }
+      if (!row.hasAttribute('data-row')) { row.hidden = false; return; }
       var cell = row.cells[1];
       var empty = !cell || cell.textContent === '—';
       row.hidden = empty && !running;
@@ -325,16 +349,19 @@
 
       /* Counts only. The values are never in this payload. */
       var d = status.details;
-      text(els.details, d ? (
-        (d.title ? 'title, ' : 'no title, ') + d.speakers + ' speaker(s), '
-        + d.companies + ' company(ies), ' + d.terms + ' word(s)'
-      ) : null);
+      text(els.details, d ? [
+        d.title ? 'title' : 'no title',
+        plural(d.speakers, 'speaker'),
+        plural(d.companies, 'company', 'companies'),
+        plural(d.terms, 'word')
+      ].join(', ') : null);
 
       text(els.engine, status.engine_state);
       els.engine.className = status.engine_state === 'reconnecting'
         ? 'error' : '';
       text(els.lag, num(status.lag_seconds, 2, ' s'));
-      text(els.retries, pair(status.reconnects, status.rollovers));
+      text(els.reconnects, status.reconnects);
+      text(els.rollovers, status.rollovers);
       text(els.lost, num(status.dropped_seconds, 1, ' s'));
       els.lost.className = status.dropped_seconds ? 'error' : '';
       text(els.silence, num(status.silent_seconds, 0, ' s'));
@@ -342,7 +369,10 @@
         typeof status.streamed_seconds === 'number'
           ? status.streamed_seconds / 60 : undefined, 2, ' min'));
 
-      tidyRows(running);
+      /* An engine is involved when one is connected now, or when the run
+       * that just finished had one. A replay never has one. */
+      tidyRows(running, !!(status.engine_state
+        || status.reconnects !== undefined || status.dropped_seconds));
     });
 
     section('error', function () {
@@ -351,8 +381,14 @@
        * was "this page has a bug". Page problems go to their own banner. */
       text(els.error, status.error, 'none');
       els.error.className = status.error ? 'error' : '';
-      els.errorBanner.textContent = status.error || '';
+      text(els.errorText, status.error, '');
       els.errorBanner.hidden = !status.error;
+      /* One plain line for the error an operator can actually act on. The
+       * key is the only thing on this list they can fix from their seat. */
+      var auth = /unauthenticated|permission_denied|invalid api key/i
+        .test(status.error || '');
+      text(els.errorAdvice, auth ? 'The API key in .env was rejected.' : '', '');
+      els.errorAdvice.hidden = !auth;
       els.statusCard.className = status.error ? 'card danger' : 'card';
     });
 
@@ -472,7 +508,10 @@
     if (!els.applyBar) { return; }
     els.applyBar.hidden = !pending;
     els.detailsCard.className = pending ? 'card attention' : 'card';
-    if (pending) { detailsState('Saved — not in use yet.', 'pending'); }
+    /* The amber bar says "saved, not in use yet" in full. Saying it again
+     * beside the Save button only made the page look like it was repeating
+     * itself, so the small line is cleared instead. */
+    if (pending) { detailsState('', null); }
   }
 
   function sendDetails(details, note) {

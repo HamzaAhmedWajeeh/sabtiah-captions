@@ -18,6 +18,7 @@
 <body class="admin" data-page="admin">
 
   <header class="topbar">
+    <h1>Sabtiah Live Captions</h1>
     <div class="pill stopped" id="state-pill">STOPPED</div>
     <div class="topstats">
       <div class="topstat"><b id="t-elapsed">—</b><span>elapsed</span></div>
@@ -29,7 +30,6 @@
       <button type="button" id="start" class="primary">Start</button>
       <button type="button" id="stop" class="ghost">Stop</button>
     </div>
-    <h1>Sabtiah Live Captions</h1>
   </header>
 
   <div class="wrap">
@@ -38,8 +38,13 @@
          admin.js. Kept apart from the engine's error so a page fault is never
          read as a transcription failure. -->
     <p class="banner page" id="page-problem" hidden></p>
-    <!-- The engine's error, in red at the top where it cannot be missed. -->
-    <p class="banner engine" id="error-banner" hidden></p>
+    <!-- The engine's error, in red at the top where it cannot be missed.
+         The second line is advice, shown only when there is something
+         specific to say. -->
+    <div class="banner engine" id="error-banner" hidden>
+      <b id="error-text"></b>
+      <span id="error-advice" hidden></span>
+    </div>
 
     <div class="meterwrap">
       <!-- aria-hidden: the numbers beside the bar say the same thing, and a
@@ -181,7 +186,7 @@
             <div class="spendfig"><b id="s-cost">—</b><span>spent</span></div>
             <div class="spendfig"><b id="s-left">—</b><span>left</span></div>
           </div>
-          <div class="spendbar"><div id="spend-fill"></div></div>
+          <div class="spendbar" id="spend-bar"><div id="spend-fill"></div></div>
           <p class="note" id="spend-note"></p>
           <table>
             <tbody>
@@ -204,12 +209,13 @@
               <tr data-row><th>Saved audio</th><td id="s-recording">—</td></tr>
               <tr data-row><th>Run log</th><td id="s-capture">—</td></tr>
 
-              <tr class="group"><th colspan="2">Connection</th></tr>
-              <tr data-row><th>State</th><td id="s-engine">—</td></tr>
-              <tr data-row><th>Caption delay</th><td id="s-lag">—</td></tr>
-              <tr data-row><th>Drop-outs</th><td id="s-retries">—</td></tr>
-              <tr data-row><th>Speech lost</th><td id="s-lost">—</td></tr>
-              <tr data-row><th>Quiet for</th><td id="s-silence">—</td></tr>
+              <tr class="group" data-group="connection"><th colspan="2">Connection</th></tr>
+              <tr data-row data-group="connection"><th>State</th><td id="s-engine">—</td></tr>
+              <tr data-row data-group="connection"><th>Caption delay</th><td id="s-lag">—</td></tr>
+              <tr data-row data-group="connection"><th>Reconnects</th><td id="s-reconnects">—</td></tr>
+              <tr data-row data-group="connection"><th>Rollovers</th><td id="s-rollovers">—</td></tr>
+              <tr data-row data-group="connection"><th>Speech lost</th><td id="s-lost">—</td></tr>
+              <tr data-row data-group="connection"><th>Quiet for</th><td id="s-silence">—</td></tr>
 
               <tr class="group"><th colspan="2">Captions</th></tr>
               <tr data-row><th>Lines received</th><td id="s-responses">—</td></tr>
