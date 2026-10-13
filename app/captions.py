@@ -146,6 +146,9 @@ class CaptionState:
             lang: 0 for lang in self.languages
         }
         self._last_original_language: str | None = None
+        #: Set by `mark_gap` when the feed was interrupted; cleared by the
+        #: next final token, which must not be glued onto the text before it.
+        self._gap: dict[str, bool] = {lang: False for lang in self.languages}
 
     # -- public API --------------------------------------------------------
 
@@ -164,6 +167,31 @@ class CaptionState:
         self.status = status
         self.seq += 1
         return True
+
+    def mark_gap(self) -> bool:
+        """The audio feed was interrupted. True if anything a viewer sees changed.
+
+        Does two things, and the second one is the reason this exists rather
+        than a bare `finalize_partials`:
+
+        1. Commits the open partials, so no grey line hangs for the length of
+           a reconnect.
+        2. Records that the *next* final token in each stream begins a new
+           utterance. A reconnect opens a fresh Soniox stream, and the first
+           token of a stream has no leading space - it is the start of a
+           sentence as far as the engine is concerned. Appending it to text
+           that is already there produced `behindMicrosoft` on run7
+           (2026-10-13). A word boundary is inserted instead.
+
+        The gap is marked even when there was no partial to commit: a drop
+        between two final tokens has exactly the same joining problem.
+        """
+        changed = self.finalize_partials()
+        for language in self.languages:
+            tail = self._tail(language)
+            if tail is not None and tail.final and not tail.closed:
+                self._gap[language] = True
+        return changed
 
     def finalize_partials(self) -> bool:
         """Commit every open partial as final text. True if anything changed.
@@ -437,6 +465,15 @@ class CaptionState:
                     self._close(language, seq)
 
         para = self._open(language, seq)
+
+        # A reconnect opened a new stream, so this token starts an utterance
+        # and carries no leading space of its own (run7, `behindMicrosoft`).
+        # Done before the size break so the inserted space is a legal place
+        # to cut, exactly like any other word boundary.
+        if self._gap.get(language):
+            self._gap[language] = False
+            if para.final and not text.startswith(" ")                     and not para.final.endswith(" "):
+                text = " " + text
 
         # Soft size break (finding 3). Only legal immediately before a
         # space-leading token, because tokens are sub-word pieces (finding 1)

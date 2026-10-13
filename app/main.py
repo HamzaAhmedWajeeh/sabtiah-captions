@@ -221,13 +221,15 @@ class CaptionSession:
             self.hub.notify()
 
     def _on_engine_drop(self) -> None:
-        """A connection just died. Commit whatever was still grey.
+        """A connection just died. Mark the discontinuity.
 
-        Otherwise an uncommitted partial sits on every phone for the length of
-        the reconnect, and arrives a second time when the ring buffer replays
-        the audio that produced it.
+        Two things, both learned from run7 (2026-10-13): an uncommitted
+        partial would otherwise sit grey on every phone for the length of the
+        reconnect, and the first token of the *new* stream carries no leading
+        space, so appending it glued two sentences together
+        (`behindMicrosoft`). `mark_gap` handles both.
         """
-        if self.state.finalize_partials():
+        if self.state.mark_gap():
             self.hub.notify()
 
     async def _run_live(self, client: SonioxClient) -> None:

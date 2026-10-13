@@ -20,3 +20,11 @@ __pycache__/
 # and are tracked on purpose: they are the Phase 1 evidence. Same judgment
 # applies before making this repo public.
 docs/captures/*.jsonl
+
+# Live-run recordings, same judgment as docs/captures/*.jsonl above: they are
+# verbatim transcripts of whatever was said in the room, and run7's includes a
+# third-party YouTube clip played aloud. The analysis in docs/live/*.md is
+# tracked and quotes only what it needs. Committing a raw one is a deliberate
+# act (git add -f).
+docs/live/*.jsonl
+docs/live/*.json

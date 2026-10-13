@@ -95,6 +95,15 @@ assert len(RETRYABLE_ERRORS | FATAL_ERRORS) == 14
 BACKOFF_BASE = 0.5
 BACKOFF_CAP = 8.0
 
+#: A lower cap for failures that never reached Soniox at all - DNS, a refused
+#: socket, a dead route. Those cost the server nothing, so there is no reason
+#: to be polite about them, and the wait is pure dead time: on run7 the
+#: attempt that finally succeeded was scheduled 8 s after the one before it,
+#: so the laptop may have had working DNS for most of those 8 s and simply
+#: sat there. Errors Soniox *reported* keep the 8 s cap, because hammering a
+#: service that answered "unavailable" is rude and does not help.
+NETWORK_BACKOFF_CAP = 2.0
+
 #: An unrecognised `error_type` is treated as retryable - the documented list
 #: may grow - but capped, because an undocumented *fatal* error would
 #: otherwise reconnect for ever.
@@ -105,8 +114,20 @@ MAX_UNKNOWN_ATTEMPTS = 3
 #: is a dropped connection mid-talk.
 KEEPALIVE_SECONDS = 20.0
 
-#: Audio kept for replay after a drop (spec: "the last 20 s").
-RING_SECONDS = 20.0
+#: Audio kept for replay after a drop. BUILD_SPEC says 20 s, sized against
+#: its own acceptance test of a 10 s Wi-Fi drop. **Run7 (2026-10-13) showed
+#: that is not what a 10 s drop costs**: the radio was off for about ten
+#: seconds, DNS stayed broken afterwards, and the connection was down for
+#: 32.5 s. The ring held 20 s, so the oldest 12.5 s - the speech immediately
+#: after the drop, which is the part anyone notices - was gone before the
+#: reconnect. 45 s covers that outage with room to spare and costs about
+#: 1.4 MB of memory.
+#:
+#: It is not free to raise without limit: every re-sent second is billed, and
+#: because Soniox acknowledges at roughly real time, replaying N seconds
+#: leaves the captions N seconds behind for the rest of the session. Run7 sat
+#: ~20 s behind after its reconnect. See `dropped_seconds`.
+RING_SECONDS = 45.0
 
 #: Proactive rollover, under the documented 300-minute cap.
 ROLLOVER_MS = 280 * 60 * 1000
@@ -251,6 +272,10 @@ class SonioxClient:
 
         self.state = IDLE
         self.last_error: dict[str, Any] | None = None
+        #: Errors that were survived. Kept so a recovered incident is still
+        #: visible after the fact without `last_error` claiming the session is
+        #: currently broken.
+        self.recovered_errors: list[dict[str, Any]] = []
         self.responses = 0
         self.reconnects = 0
         self.rollovers = 0
@@ -259,12 +284,16 @@ class SonioxClient:
         #: Audio actually put on the wire, re-sent ring audio included. This
         #: is the number the budget cares about.
         self.audio_seconds_sent = 0.0
+        #: Audio that was captured, never acknowledged, and fell out of the
+        #: ring before a connection came back. Words the audience never saw.
+        self.dropped_seconds = 0.0
 
         self._captured_ms = 0
         self._conn_start_ms = 0
         self._conn_sent_ms = 0
         self._acked_ms = 0
         self._global_acked_ms = 0
+        self._dropped_to = 0
         self._conn_responses = 0
 
         self._ring: deque[tuple[int, bytes]] = deque()
@@ -310,6 +339,11 @@ class SonioxClient:
         return {
             "engine_state": self.state,
             "engine_error": self.last_error,
+            "engine_recovered": len(self.recovered_errors),
+            "engine_last_recovered": (
+                self.recovered_errors[-1] if self.recovered_errors else None
+            ),
+            "dropped_seconds": round(self.dropped_seconds, 1),
             "engine_responses": self.responses,
             "reconnects": self.reconnects,
             "rollovers": self.rollovers,
@@ -374,10 +408,17 @@ class SonioxClient:
         Built without awaiting, so the pump cannot interleave a live chunk
         into the middle of the replay.
         """
-        resume_from = max(
-            self._global_acked_ms,
-            self._captured_ms - int(self.ring_seconds * 1000),
-        )
+        floor = self._captured_ms - int(self.ring_seconds * 1000)
+        resume_from = max(self._global_acked_ms, floor)
+        if floor > self._global_acked_ms:
+            # The outage outlived the ring. Whatever Soniox never acknowledged
+            # and the ring no longer holds is simply gone, and the operator
+            # should be able to see that rather than infer it from a sentence
+            # that reads oddly.
+            lost = (floor - max(self._global_acked_ms, self._dropped_to)) / 1000
+            if lost > 0:
+                self.dropped_seconds += lost
+                self._dropped_to = floor
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         replayed = [c for end_ms, c in self._ring if end_ms > resume_from]
         first_end = next(
@@ -516,6 +557,13 @@ class SonioxClient:
             if data.get("tokens"):
                 self.responses += 1
                 self._conn_responses += 1
+                if (self._conn_responses == HEALTHY_AFTER_RESPONSES
+                        and self.last_error is not None):
+                    # Recovered. Leaving the old error on `/admin` makes a
+                    # working session look broken - run7 finished healthy with
+                    # a DNS failure still showing as the last error.
+                    self.recovered_errors.append(self.last_error)
+                    self.last_error = None
                 self._events.put_nowait(("response", data))
             if data.get("finished"):
                 return "finished"
@@ -533,6 +581,7 @@ class SonioxClient:
                     await self._wait_for_sound()
                     continue
 
+                backoff_cap = BACKOFF_CAP
                 self._set_state(RECONNECTING if attempt else CONNECTING)
                 try:
                     reason = await self._one_connection()
@@ -546,26 +595,23 @@ class SonioxClient:
                         unknown_attempts += 1
                         if unknown_attempts >= self.max_unknown_attempts:
                             break
-                except (OSError, ConnectionError, asyncio.TimeoutError) as exc:
-                    # Network failures are retryable by definition: nothing
-                    # about the request was refused.
-                    self.last_error = {
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
-                        "fatal": False,
-                    }
                 except Exception as exc:
-                    # Anything unrecognised, including whatever the websockets
-                    # library raises on a dropped socket. Retried under the
-                    # same cap as an unknown `error_type`.
+                    network = is_network_error(exc)
                     self.last_error = {
                         "error_type": type(exc).__name__,
                         "error_message": str(exc),
                         "fatal": False,
+                        "network": network,
                     }
-                    unknown_attempts += 1
-                    if unknown_attempts >= self.max_unknown_attempts:
-                        break
+                    if not network:
+                        # Something unrecognised that was not a dropped link.
+                        # Retried under the same cap as an unknown
+                        # `error_type`, so it cannot loop for ever.
+                        unknown_attempts += 1
+                        if unknown_attempts >= self.max_unknown_attempts:
+                            break
+                    backoff_cap = (NETWORK_BACKOFF_CAP if network
+                                   else BACKOFF_CAP)
                 else:
                     if reason == "finished":
                         break
@@ -588,7 +634,7 @@ class SonioxClient:
                 self._set_state(RECONNECTING)
                 if self._on_drop is not None:
                     self._on_drop()
-                await asyncio.sleep(_backoff(attempt))
+                await asyncio.sleep(_backoff(attempt, backoff_cap))
                 attempt += 1
         except asyncio.CancelledError:
             raise
@@ -650,9 +696,23 @@ class SonioxClient:
         self._set_state(STOPPED)
 
 
-def _backoff(attempt: int) -> float:
-    """0.5s, 1s, 2s, 4s, 8s, 8s, ... (BUILD_SPEC Phase 5)."""
-    return min(BACKOFF_BASE * math.pow(2, attempt), BACKOFF_CAP)
+def _backoff(attempt: int, cap: float = BACKOFF_CAP) -> float:
+    """0.5s, 1s, 2s, 4s, 8s, 8s, ... (BUILD_SPEC Phase 5), under `cap`."""
+    return min(BACKOFF_BASE * math.pow(2, attempt), cap)
+
+
+def is_network_error(exc: BaseException) -> bool:
+    """True for a failure that never reached Soniox.
+
+    `socket.gaierror` (DNS) and the rest of `OSError` are the obvious half.
+    The other half is whatever `websockets` raises when a live connection
+    dies - `ConnectionClosedError` and friends - which is a dropped network
+    link, not a refusal. Matched by module name so this file does not have to
+    import `websockets`, which is what keeps every test offline.
+    """
+    if isinstance(exc, (OSError, ConnectionError, asyncio.TimeoutError)):
+        return True
+    return type(exc).__module__.split(".")[0] == "websockets"
 
 
 async def _quietly(task: asyncio.Task) -> None:

@@ -8,8 +8,19 @@
 # المحوّلات.
 #
 # Mapping a term to itself is how a word is kept in English inside the Arabic
-# captions. `Sabtiah` is the deliberate exception: it is a name the audience
-# reads in Arabic.
+# captions, and run7 (2026-10-13) proved it works: `transformers` came back as
+# المحوّلات on run6 when it was in neither list, and as `transformers` on run7
+# with nothing else changed.
+#
+# Two words did not obey it on run7, and both are ordinary English with a
+# settled Arabic equivalent: `agents` became أجهزة ("devices") and `AI` became
+# الذكاء الاصطناعي. `AI` is deliberately no longer in `translation_terms` -
+# الذكاء الاصطناعي is the natural Arabic and the audience reads it more easily
+# than the acronym. It stays in `terms` so it is still recognised.
+# `agents` is left in to be retested; see docs/soniox-notes.md.
+#
+# `Sabtiah` is the other deliberate exception: a name the audience reads in
+# Arabic.
 terms:
   - RAG
   - MCP
@@ -41,6 +52,5 @@ translation_terms:
   - {source: fine-tuning, target: fine-tuning}
   - {source: embeddings, target: embeddings}
   - {source: ChatGPT, target: ChatGPT}
-  - {source: AI, target: AI}
   # Not English: the meetup's own name is read in Arabic.
   - {source: Sabtiah, target: السبتية}

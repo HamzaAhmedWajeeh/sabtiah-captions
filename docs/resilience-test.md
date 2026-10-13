@@ -8,15 +8,16 @@ credit and a stopwatch, and $10 has to cover the demo, so each is split in two:
 2. **The live confirmation** only has to show that the real server behaves
    like the fake. It is cheap, short, and listed below as outstanding.
 
-Status: **offline half done, live half not run.** No live run has happened; as
-of 2026-10-13 the project has spent 22.0 minutes, all of it in Phase 1.
+Status: **offline half done. Live half run once, on run7, and it found two
+bugs.** See the run7 section below - the headline is that a 10 s Wi-Fi drop
+produced a 32.5 s outage, which a 20 s ring cannot cover.
 
 | # | BUILD_SPEC acceptance | Offline | Live |
 | --- | --- | --- | --- |
-| 1 | Wi-Fi off 10 s mid-sentence, back on: captions resume, the sentence spoken during the drop appears | ✅ `test_a_mid_sentence_drop_reconnects_and_loses_no_audio` | ❌ not run |
-| 2 | Network dead 2 min: admin shows reconnecting, pages show an indicator, recovery is automatic | ✅ `test_a_long_outage_backs_off_and_keeps_trying`, `test_the_engine_state_reaches_the_pages_without_clearing_live` | ❌ not run |
+| 1 | Wi-Fi off 10 s mid-sentence, back on: captions resume, the sentence spoken during the drop appears | ✅ `test_a_ring_that_outlives_the_outage_loses_nothing` | ❌ **FAILED on run7**, fixed, **needs a re-run** |
+| 2 | Network dead 2 min: admin shows reconnecting, pages show an indicator, recovery is automatic | ✅ `test_a_long_outage_backs_off_and_keeps_trying`, `test_the_engine_state_reaches_the_pages_without_clearing_live` | ⚠️ passed on run7 for a 32.5 s outage, not 2 min; stale-error flaw fixed |
 | 3 | Invalid API key: admin shows a clear error, no retry loop | ✅ `test_a_fatal_error_stops_without_retrying` (all 8 fatal types), `test_a_fatal_error_stops_the_session_and_shows_up_on_admin` | ❌ not run |
-| 4 | 60 minutes continuous from `FileSource`, no memory growth beyond the 200-segment cap | ⚠️ partial — the cap and the ring bound are tested, the hour is not | ❌ not run |
+| 4 | 60 minutes continuous from `FileSource`, no memory growth beyond the 200-segment cap | ⚠️ partial — the cap and the ring bound are tested, the hour is not | ❌ not run (needs no credit) |
 
 ## What the offline tests actually prove
 
@@ -41,6 +42,101 @@ ring bound (20 s) are both tested directly. What is **not** tested is an hour
 of wall-clock running, so a slow leak outside those two structures would not
 be caught. See below.
 
+## run7, 2026-10-13: the first real outage — acceptance 1 and 2, FAILED then fixed
+
+A live run of 184 s (172.9 s billable) with a deliberate Wi-Fi drop. This is
+the first time the resilience code met a real network, and it found two bugs
+that every offline test had passed.
+
+### What happened, from `docs/live/run7.jsonl`
+
+| | |
+| --- | --- |
+| Connection lost | 562.0 s (`ConnectionClosedError`) |
+| Reconnect attempts | 7, at +0.5, +1.0, +2.1, +4.1, +7.8, +7.8 s |
+| Failure during the outage | `gaierror: [Errno 11001] getaddrinfo failed` — DNS |
+| Connection restored | 594.5 s |
+| **Outage length** | **32.5 s**, from a Wi-Fi drop of about 10 s |
+| Audio replayed on reconnect | 21.7 s, sent in ~1 s (`streamed` 41.1 → 62.8) |
+| Lag after recovery | 3.5 s → 21.7 s, and **stayed ~20 s for the rest of the run** |
+
+### Acceptance 1 FAILED: the sentence spoken during the drop did not appear
+
+`the same architecture behind ChatGPT` never reached the page, along with
+roughly ten seconds after it.
+
+**The ring replay was not broken — it fired correctly.** `streamed` jumping
+41.1 → 62.8 s in one second is 21.7 s of buffered audio going out on the new
+connection. The arithmetic is what failed:
+
+```
+outage   32.5 s   audio captured with nowhere to send it
+ring     20.0 s   what the buffer holds
+replayed 21.7 s   what went out
+lost    ~12.5 s   the OLDEST audio - the speech right after the drop
+```
+
+The ring discards oldest-first, so the twelve seconds it dropped were exactly
+the ones the speaker noticed missing. BUILD_SPEC's 20 s was sized against its
+own acceptance test of a *10 s drop*; a 10 s drop does not cost 10 s, because
+DNS stays broken after the radio comes back.
+
+**Two fixes.** The ring is now **45 s**, which covers this outage with room to
+spare at a cost of about 1.4 MB. And failures that never reached Soniox — DNS,
+a refused socket, a dead route — now back off to a **2 s cap instead of 8 s**;
+the attempt that finally succeeded on run7 was scheduled 8 s after the one
+before it, so the laptop may have had working DNS for most of that time and
+simply sat there. Errors Soniox *reported* keep the 8 s cap.
+
+A third fix, found while reading the code for the first two:
+`ConnectionClosedError` was counted as an *unknown* error, which is capped at
+three attempts. Three drops in one session would have stopped the stream for
+good, and a conference Wi-Fi gives you three drops. It is now classified as a
+network error, like DNS.
+
+Tests: `test_an_outage_longer_than_the_ring_loses_speech` reproduces the loss
+by numbering every chunk and checking which ones reached the server;
+`test_a_ring_that_outlives_the_outage_loses_nothing` is the fix.
+
+### The joined-sentence bug: `behindMicrosoft`
+
+The text that did arrive was glued onto the previous sentence with no space.
+
+A reconnect opens a **new** Soniox stream, and the first token of a stream has
+no leading space — it is the start of an utterance as far as the engine is
+concerned. `CaptionState` only strips or inserts spacing when a paragraph is
+empty, so it concatenated directly. `CaptionState.mark_gap()` now records the
+discontinuity and separates the next token; it replaces the bare
+`finalize_partials()` call on a drop, so it still commits grey text too.
+
+Tested in `tests/test_captions.py` with the literal run7 string.
+
+### Acceptance 2 PASSED, with one flaw
+
+Recovery was automatic and needed no operator action, the backoff behaved
+exactly as specified, and `live` stayed true throughout so the pages kept
+their captions. The engine state went `streaming → reconnecting → streaming`
+and the audience chip followed.
+
+The flaw: **`gaierror` was still showing as the last error when the run
+finished healthy.** It was correctly classified — `fatal: false`, retried
+seven times, never treated as terminal — but a session that has recovered
+should not look broken on `/admin`. `last_error` now clears once a connection
+carries a response, and the incident moves to `recovered_errors` so it is
+still visible after the fact. `engine_recovered` on the status says how many
+times that happened.
+
+### Still unmeasured after run7
+
+- **A replay leaves the captions behind.** Soniox acknowledges at roughly real
+  time, so replaying 20 s left run7 running ~20 s late for its remaining 110
+  seconds. With a 45 s ring a long outage could leave the captions 45 s behind,
+  which for a live audience may be worse than losing the words. There is no
+  policy for this yet and it needs a decision, not a default.
+- `dropped_seconds` now reports audio the ring could not cover, but it has
+  never been seen on a real run.
+- Acceptance 4, the 60-minute soak, still has not been run. It needs no credit.
+
 ## Things found while writing these tests
 
 - **A graceful end was being read as the end of the talk.** When the client
@@ -60,16 +156,20 @@ be caught. See below.
 
 ## Still to do live (ask Hamza first — this spends credit)
 
-A single run of **2 minutes or less** covers 1, 2 and 3:
+One short run, after the run7 fixes:
 
-1. Start a live session from `/admin` with the headset mic.
-2. Speak a sentence; confirm captions on the phone.
-3. Turn Wi-Fi off mid-sentence for ~10 s, keep talking, turn it back on.
-   Confirm the sentence spoken during the drop appears, and that the phone
-   showed `reconnecting` rather than going blank.
-4. Stop. Then restart with a deliberately wrong key and confirm `/admin` shows
-   `unauthenticated` with exactly one connection attempt.
+1. Speak a sentence with `agents` and `agent` in it, and `ChatGPT` — the two
+   terms run7 could not settle.
+2. Drop Wi-Fi mid-sentence for ~10 s. Confirm the sentence spoken during the
+   drop now **does** appear, and that the join reads `behind ChatGPT` rather
+   than `behindChatGPT`.
+3. Watch `dropped_seconds` on `/admin`: it should stay at 0.
+4. After recovery, confirm the last error has cleared and `engine_recovered`
+   is 1.
 
-Item 4 of the spec (the 60-minute run) does not need credit: run it from
+Separately, and with a deliberately wrong key, acceptance 3 is still unrun
+live: one start, one error, no retry loop.
+
+Acceptance 4, the 60-minute soak, **needs no credit** — run it from
 `FileSource` against the replay path, which exercises `CaptionState` and the
-broadcast hub for an hour without the engine. **Not yet done.**
+broadcast hub for an hour without the engine. Still not done.

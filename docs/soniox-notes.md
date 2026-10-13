@@ -2,9 +2,15 @@
 
 Status: **answered.** Three 5-minute captures against `stt-rt-v5` on
 2026-10-11, all five questions in BUILD_SPEC.md section 4 settled with token
-evidence below. One gap remains and it is a big one: **the English-to-Arabic
-direction was never exercised**, because the test audio contains no English
-speech. See [What is still untested](#what-is-still-untested).
+evidence below. The English-to-Arabic gap was closed by two follow-up captures
+the same day.
+
+**Updated 2026-10-13 from two live runs (run6, run7).** The open question that
+mattered most - whether `translation_terms` keeps English technical vocabulary
+in the Arabic captions - is now **answered: yes.** It supersedes the Phase 1
+finding that nothing stays in Latin script, which was measured with an empty
+glossary. See [ANSWERED: `translation_terms` keeps English words in the Arabic
+captions](#answered-translation_terms-keeps-english-words-in-the-arabic-captions).
 
 | Capture | Config | Responses | Segments |
 | --- | --- | --- | --- |
@@ -783,7 +789,13 @@ well; invented words, slang and profanity are where it fails, and it fails by
 confidently producing fluent nonsense rather than leaving a gap. One more of the
 same kind - "large deposits" became `ردائعًا كبيرة`, and `ردائع` is not a word.
 
-### English to Arabic: nothing stays in Latin script
+### English to Arabic: nothing stays in Latin script (with an empty glossary)
+
+> **Superseded on 2026-10-13.** This was measured with
+> `translation_terms` empty. With terms in it, they survive - see
+> [ANSWERED: `translation_terms` keeps English words in the Arabic
+> captions](#answered-translation_terms-keeps-english-words-in-the-arabic-captions).
+> The zero below is the behaviour of the *default*, not of the mechanism.
 
 **This is the finding with the most consequence for the demo.** In the Arabic
 captions, Latin-script runs surviving from the English original:
@@ -952,6 +964,83 @@ screen in 0.63-0.73 s and its translation lands within 0.67-0.73 s, in every
 capture. English finalises *faster* than Arabic (1306 ms vs 1510/1588 ms) and
 appears marginally slower. None of this changes any design decision - it is
 simply reliable.
+
+## ANSWERED: `translation_terms` keeps English words in the Arabic captions
+
+**Status: answered on 2026-10-13 by run7, live.** This was the highest-value
+open question in the project from 2026-10-11 onward, and the answer is yes,
+with two exceptions worth knowing.
+
+`run6` and `run7` are a controlled comparison on one word. Same speaker, same
+microphone, same config in every respect except the glossary:
+
+| | `transformers` in `terms`? | in `translation_terms`? | Arabic caption said |
+| --- | --- | --- | --- |
+| run6 | no | no | **المحوّلات** |
+| run7 | yes | yes | **transformers** |
+
+Nothing else changed between the two runs. Mapping a term to itself
+(`{source: X, target: X}`) is what keeps it in Latin script.
+
+### What survived on run7
+
+Six of six technical terms kept their English form in the Arabic stream:
+
+| term | spoken (en) | kept in Arabic |
+| --- | --- | --- |
+| RAG | 2 | **2** |
+| fine-tuning | 2 | **2** |
+| embeddings | 1 | **1** |
+| LLM | 1 | **1** |
+| MCP | 1 | **1** |
+| transformers | 1 | **1** |
+
+Every Latin-script run surviving in the Arabic stream was a glossary term:
+`LLM`, `MCP`, `RAG`, `embeddings`, `fine-tuning`, `transformers`. Nothing
+leaked, and nothing else was preserved by accident.
+
+This also **supersedes the Phase 1 finding** that "nothing stays in Latin
+script in Arabic captions". That measurement was taken with an empty
+`translation_terms`, and it was a statement about the default, not about the
+mechanism.
+
+### The two that did not obey it
+
+| term | spoken (en) | Arabic caption | in `translation_terms`? |
+| --- | --- | --- | --- |
+| agents | 1 | **أجهزة** ("devices") | yes |
+| AI | 1 | **الذكاء الاصطناعي** | yes |
+
+Both were in the list and both were translated anyway, so `translation_terms`
+is a **strong hint, not a guarantee**.
+
+**Singular versus plural is not the explanation.** Both `agent` and `agents`
+were in `translation_terms` on run7 (verified against the committed file at
+`f3eb3f1`), and two of the words that *did* survive — `transformers` and
+`embeddings` — are plural. Only the plural `agents` was spoken, so the
+singular is untested.
+
+The pattern that does fit: the six that survived are acronyms or technical
+loanwords with no settled Arabic form, while `agents` and `AI` are ordinary
+English words with established Arabic equivalents the model prefers. `أجهزة`
+is additionally a *wrong* translation — it means "devices", not "agents" — so
+the model does not appear to have recognised the AI sense of the word at all.
+
+### What this means for the demo
+
+- **Keep the glossary.** It is the difference between `المحوّلات` and
+  `transformers` in front of an audience that uses the English word.
+- **`AI` was removed from `translation_terms`.** `الذكاء الاصطناعي` is the
+  natural Arabic and reads more easily than the acronym; it stays in `terms`
+  so it is still recognised.
+- **`agents` is still in, and is the one term to watch** on the next run. If
+  it fails again, the honest options are to accept it or to map it to a chosen
+  Arabic word (`وكلاء`) rather than leaving the model to pick `أجهزة`.
+- **A term must be in `terms` as well.** `transformers` was in neither list on
+  run6. A word the recogniser does not expect cannot be preserved by the
+  translator.
+
+Transcripts: `docs/live/run6-first-live.json`, `docs/live/run7-live.json`.
 
 ## Verified without Soniox
 

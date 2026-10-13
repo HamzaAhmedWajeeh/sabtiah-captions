@@ -1,0 +1,39 @@
+recording to docs\live\run7.jsonl
+start the run from /admin now. Ctrl-C when it is done.
+
+==================================================================
+recorded 1499.9 s, 1887 feed messages, 2906 status polls
+streamed 172.9 s  responses 522  reconnects 7  rollovers 0  pauses 0
+engine error: {'error_type': 'gaierror', 'error_message': '[Errno 11001] getaddrinfo failed', 'fatal': False}
+
+engine state changes
+    520.7s  start -> connecting
+    521.8s  connecting -> streaming
+    562.0s  streaming -> reconnecting
+    594.5s  reconnecting -> streaming
+  ** outage recovered in 32.5 s **
+
+caption delay (audio sent but not yet acknowledged)
+  median 12.02 s   p90 20.70 s   max 23.30 s
+
+translation_terms: did the English word survive into the Arabic?
+  term            said (en)   kept (ar)
+  transformers    yes         YES
+  transformer     no          -
+  LLM             yes         YES
+  LLMs            no          -
+  RAG             yes         YES
+  MCP             yes         YES
+  agent           no          -
+  agents          yes         no
+  fine-tuning     yes         YES
+  embeddings      yes         YES
+  ChatGPT         no          -
+
+all Latin-script runs surviving in the ar stream: ['LLM', 'MCP', 'RAG', 'embeddings', 'fine-tuning', 'transformers']
+Arabic script present in the en stream: yes - LEAK
+
+en 14 paragraphs, ar 14 paragraphs
+==================================================================
+
+[exited with code 0]

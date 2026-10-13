@@ -645,3 +645,107 @@ def test_a_hard_break_only_happens_when_no_cut_was_available(name, language):
             f"paragraph {para.id} was hard-broken but a cut existed: "
             f"{para.final[-60:]!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# A reconnect must not glue two sentences together (run7, 2026-10-13)
+# ---------------------------------------------------------------------------
+#
+# The Wi-Fi drop on run7 produced "the same architecture behindMicrosoft" on
+# the phone. A reconnect opens a *new* Soniox stream, and the first token of a
+# stream has no leading space - it is the start of an utterance as far as the
+# engine is concerned - so appending it to the text already there joined two
+# words with nothing between them.
+
+
+def test_a_reconnect_does_not_glue_the_next_word_on():
+    """The exact run7 failure, in the smallest form that produces it."""
+    state = CaptionState()
+    state.add_response(response(token("the same architecture behind", lang="en")))
+
+    state.mark_gap()  # the connection dropped here
+
+    # A new stream: its first token carries no leading space.
+    state.add_response(response(token("Microsoft", lang="en")))
+
+    text = state.render("en")
+    assert "behindMicrosoft" not in text
+    assert "behind Microsoft" in text
+
+
+def test_the_gap_commits_the_grey_text_as_well():
+    state = CaptionState()
+    state.add_response(response(token("committed", lang="en")))
+    state.add_response(response(token(" and some uncommitted",
+                                      final=False, lang="en")))
+    assert state.streams["en"][-1].partial == " and some uncommitted"
+
+    assert state.mark_gap() is True
+    assert state.streams["en"][-1].partial == ""
+    assert state.streams["en"][-1].final == "committed and some uncommitted"
+
+
+def test_a_gap_with_no_partial_still_separates_the_next_token():
+    """A drop between two final tokens has the same joining problem."""
+    state = CaptionState()
+    state.add_response(response(token("first", lang="en")))
+    assert state.mark_gap() is False  # nothing grey to commit
+    state.add_response(response(token("second", lang="en")))
+    assert state.render("en") == "first second"
+
+
+def test_the_gap_space_is_not_doubled():
+    """Soniox usually *does* send a leading space; the fix must not add
+    a second one when it does."""
+    state = CaptionState()
+    state.add_response(response(token("first", lang="en")))
+    state.mark_gap()
+    state.add_response(response(token(" second", lang="en")))
+    assert state.render("en") == "first second"
+    assert "  " not in state.render("en")
+
+
+def test_the_gap_does_not_indent_a_fresh_paragraph():
+    """Nothing to join to means nothing to insert."""
+    state = CaptionState()
+    state.mark_gap()
+    state.add_response(response(token("opening", lang="en")))
+    assert state.render("en") == "opening"
+    assert not state.streams["en"][-1].final.startswith(" ")
+
+
+def test_the_gap_is_per_language():
+    """A drop interrupts both streams, and each resumes on its own token."""
+    state = CaptionState()
+    state.add_response(response(token("english", lang="en"),
+                                token("عربي", lang="ar")))
+    state.mark_gap()
+    state.add_response(response(token("next", lang="en")))
+    assert state.render("en") == "english next"
+    # The Arabic side has not spoken yet, so its gap is still pending.
+    state.add_response(response(token("تالي", lang="ar")))
+    assert state.render("ar") == "عربي تالي"
+
+
+def test_the_gap_clears_after_one_use():
+    state = CaptionState()
+    state.add_response(response(token("one", lang="en")))
+    state.mark_gap()
+    state.add_response(response(token("two", lang="en")))
+    state.add_response(response(token("three", lang="en")))
+    # Only the first token after the gap is separated; the rest keep whatever
+    # spacing Soniox sent, which is how every other token is treated.
+    assert state.render("en") == "one twothree"
+
+
+def test_the_inserted_space_is_a_legal_break_point():
+    """The size break may cut at the space the gap inserted, like any other
+    word boundary - it must not produce a split word."""
+    state = CaptionState(max_paragraph_chars=40)
+    state.add_response(response(token("x" * 45, lang="en")))
+    state.mark_gap()
+    state.add_response(response(token("tail", lang="en")))
+    joined = " ".join(p.final for p in state.streams["en"])
+    assert "x" * 45 in joined
+    assert "tail" in joined
+    assert "xtail" not in joined

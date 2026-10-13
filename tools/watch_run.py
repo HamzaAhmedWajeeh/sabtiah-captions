@@ -88,13 +88,19 @@ async def watch_socket(url: str, rec: Recorder, stop: asyncio.Event,
                     for lang, paragraphs in message.get("streams", {}).items():
                         for para in paragraphs:
                             streams.setdefault(lang, {})[para["id"]] = para
+                    # The full text of every changed paragraph, not just its
+                    # id. run7 was recorded with ids only, and the transcript
+                    # then existed in exactly one place - this process's
+                    # memory - until it exited. It was recoverable that time
+                    # because the server still held the state; a crash, or a
+                    # second run started on top, and it would have been gone.
                     rec.write("feed", {
                         "type": message.get("type"),
                         "seq": message.get("seq"),
                         "live": message.get("live"),
                         "status": message.get("status"),
                         "changed": {
-                            lang: [p["id"] for p in paragraphs]
+                            lang: paragraphs
                             for lang, paragraphs in
                             message.get("streams", {}).items() if paragraphs
                         },
@@ -269,6 +275,19 @@ async def main_async(args) -> int:
         json.dumps({"streams": snapshot}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    # Plain text next to the JSON: the thing a human actually reads when
+    # asking "what did it say".
+    lines = []
+    for lang, paragraphs in snapshot.items():
+        lines.append(f"=== {lang} ===")
+        for index, para in enumerate(paragraphs, 1):
+            text = (para["final"] + para["partial"]).strip()
+            if text:
+                lines.append(f"{index:3}. {text}")
+        lines.append("")
+    Path(args.out).with_suffix(".transcript.txt").write_text(
+        "
+".join(lines), encoding="utf-8")
     report = summarise(rec, streams)
     print(report)
     Path(args.out).with_suffix(".txt").write_text(report, encoding="utf-8")

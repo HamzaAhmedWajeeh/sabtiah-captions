@@ -16,6 +16,7 @@ accident - the same discipline that kept Phases 2-4 free.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -29,8 +30,10 @@ sys.path.insert(0, str(ROOT))
 from app.audio_source import CHUNK_BYTES, CHUNK_MS  # noqa: E402
 from app.captions import CaptionState  # noqa: E402
 from app.soniox_client import (  # noqa: E402
+    BACKOFF_CAP,
     FATAL_ERRORS,
     IDLE_STOP_SECONDS,
+    NETWORK_BACKOFF_CAP,
     PAUSED,
     RETRYABLE_ERRORS,
     STOPPED,
@@ -38,6 +41,7 @@ from app.soniox_client import (  # noqa: E402
     SonioxClient,
     SonioxError,
     _backoff,
+    is_network_error,
     base_config,
     chunk_rms,
 )
@@ -688,3 +692,202 @@ def test_the_config_carries_the_session_context():
     config = base_config()
     assert "RAG" in config["context"]["terms"]
     assert isinstance(config["context"]["general"], list)
+
+
+# ---------------------------------------------------------------------------
+# Regressions from run7, the second live run (2026-10-13)
+# ---------------------------------------------------------------------------
+#
+# A ~10 s Wi-Fi drop became a 32.5 s outage, because DNS stayed broken after
+# the radio came back and the backoff had grown to 8 s. The 20 s ring could
+# not cover 32.5 s, so the oldest 12.5 s - the speech immediately after the
+# drop - was discarded before the reconnect, and the text that did arrive was
+# glued onto the previous sentence with no space ("behindMicrosoft").
+
+
+class OutageOfLength(FakeServer):
+    """Drops after `after` chunks and refuses every connection for `outage`
+    seconds of *captured audio*, then behaves.
+
+    Counted in chunks rather than wall-clock for the same reason the idle test
+    uses a fake clock: the test must not depend on real time passing.
+    """
+
+    def __init__(self, after: int, outage_chunks: int) -> None:
+        super().__init__()
+        self.after = after
+        self.outage_chunks = outage_chunks
+        self.dropped_at: int | None = None
+        self.client: SonioxClient | None = None  # set by the test
+
+    def _refusing(self) -> bool:
+        if self.dropped_at is None or self.client is None:
+            return False
+        captured = self.client._captured_ms // CHUNK_MS
+        return captured < self.dropped_at + self.outage_chunks
+
+    def __call__(self, url, **kwargs):
+        if self._refusing():
+            raise OSError(11001, "getaddrinfo failed")
+        return super().__call__(url, **kwargs)
+
+    async def on_audio(self, socket, chunk):
+        await super().on_audio(socket, chunk)
+        if self.dropped_at is None and len(socket.sent_audio) >= self.after:
+            self.dropped_at = self.client._captured_ms // CHUNK_MS
+            socket.drop()
+
+
+def numbered_chunk(index: int) -> bytes:
+    """A chunk that says which chunk it is.
+
+    Coverage is the property that matters - "the sentence spoken during the
+    drop appears" - and identical tone chunks cannot show it. The index is
+    written into the first sample so the test can check exactly which audio
+    reached the server and which was silently discarded.
+    """
+    samples = np.full(CHUNK_BYTES // 2, 1000, dtype="<i2")
+    samples[0] = index
+    return samples.tobytes()
+
+
+def indices_delivered(server: FakeServer) -> set[int]:
+    return {
+        int(np.frombuffer(chunk, dtype="<i2")[0])
+        for socket in server.sockets
+        for chunk in socket.sent_audio
+    }
+
+
+async def paced_numbered(count: int, client_box: dict):
+    """A microphone: one chunk at a time, never racing ahead of the sender."""
+    for index in range(count):
+        yield numbered_chunk(index)
+        await asyncio.sleep(0.005)
+    await asyncio.sleep(0.2)
+
+
+async def run_outage(ring_seconds: float, outage_chunks: int,
+                     total: int = 60) -> tuple[FakeServer, SonioxClient]:
+    server = OutageOfLength(after=10, outage_chunks=outage_chunks)
+    box: dict = {}
+    client = SonioxClient(paced_numbered(total, box), api_key=KEY,
+                          connect=server, ring_seconds=ring_seconds)
+    server.client = client
+
+    got = []
+
+    async def pump():
+        async for response in client:
+            got.append(response)
+
+    task = asyncio.create_task(pump())
+    for _ in range(600):
+        await asyncio.sleep(0.01)
+        if client._captured_ms >= total * CHUNK_MS and client.state == STREAMING:
+            await asyncio.sleep(0.05)
+            break
+    await client.close()
+    task.cancel()
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        await task
+    return server, client
+
+
+async def test_an_outage_longer_than_the_ring_loses_speech():
+    """The run7 bug, reproduced: a 20 s ring against a 32.5 s outage.
+
+    Scaled down - a 1 s ring against a 2.5 s outage - but it is the same
+    arithmetic, and it is the arithmetic that lost "the same architecture
+    behind ChatGPT".
+    """
+    server, client = await run_outage(ring_seconds=1.0, outage_chunks=25)
+
+    assert client.reconnects >= 1, "the outage never happened"
+    delivered = indices_delivered(server)
+    captured = set(range(client._captured_ms // CHUNK_MS))
+    missing = sorted(captured - delivered)
+    assert missing, "premise gone: this configuration should lose audio"
+    assert client.dropped_seconds > 0, "the loss was not reported"
+
+
+async def test_a_ring_that_outlives_the_outage_loses_nothing():
+    """The fix. Every chunk captured reaches the server, drop or no drop."""
+    server, client = await run_outage(ring_seconds=6.0, outage_chunks=25)
+
+    assert client.reconnects >= 1, "the outage never happened"
+    delivered = indices_delivered(server)
+    captured = set(range(client._captured_ms // CHUNK_MS))
+    missing = sorted(captured - delivered)
+    assert not missing, f"audio never sent: chunks {missing[:12]}"
+    assert client.dropped_seconds == 0
+
+
+async def test_the_shipped_ring_covers_the_outage_run7_actually_had():
+    """45 s, against the 32.5 s outage a 10 s Wi-Fi drop produced."""
+    from app.soniox_client import RING_SECONDS
+
+    assert RING_SECONDS >= 35.0, (
+        "the ring is back under the outage length measured on run7"
+    )
+
+
+async def test_dns_failure_is_retried_fast_not_at_the_eight_second_cap():
+    """run7 sat up to 8 s with working DNS before trying again.
+
+    A failure that never reached Soniox costs it nothing, so the wait is pure
+    dead time - and on run7 that dead time is part of why the outage outlived
+    the ring.
+    """
+    assert _backoff(0, NETWORK_BACKOFF_CAP) == 0.5
+    assert _backoff(5, NETWORK_BACKOFF_CAP) == NETWORK_BACKOFF_CAP
+    assert _backoff(5, BACKOFF_CAP) == BACKOFF_CAP
+    assert NETWORK_BACKOFF_CAP < BACKOFF_CAP
+
+
+def test_a_dropped_socket_is_a_network_error_not_an_unknown_one():
+    """`websockets` exceptions must not burn the unknown-error budget.
+
+    run7's first failure was `ConnectionClosedError`, which the old code
+    counted as unknown. Three drops in a session would have stopped it - and a
+    conference Wi-Fi gives you three drops.
+    """
+    import socket
+
+    assert is_network_error(socket.gaierror(11001, "getaddrinfo failed"))
+    assert is_network_error(OSError("unreachable"))
+    assert is_network_error(asyncio.TimeoutError())
+
+    class ConnectionClosedError(Exception):
+        pass
+    ConnectionClosedError.__module__ = "websockets.exceptions"
+    assert is_network_error(ConnectionClosedError("1006"))
+
+    assert not is_network_error(ValueError("a real bug"))
+
+
+async def test_a_recovered_error_clears_from_the_status():
+    """run7 finished healthy with a DNS failure still shown as the last error.
+
+    A working session that looks broken on `/admin` is how an operator stops
+    trusting the page.
+    """
+    server = ErrorsOnce("service_unavailable", repeat=False)
+    client = SonioxClient(audio_stream([tone_chunk()] * 6), api_key=KEY,
+                          connect=server)
+    await collect(client, timeout=3.0)
+
+    assert client.last_error is None, f"stale error: {client.last_error}"
+    # ...but the incident is still on the record.
+    assert len(client.recovered_errors) == 1
+    assert client.recovered_errors[0]["error_type"] == "service_unavailable"
+    assert client.status()["engine_recovered"] == 1
+
+
+async def test_dropped_seconds_is_reported_to_the_operator():
+    """Lost words should be a number on `/admin`, not something the operator
+    infers from a sentence that reads oddly."""
+    server, client = await run_outage(ring_seconds=1.0, outage_chunks=25)
+    status = client.status()
+    assert status["dropped_seconds"] > 0
+    assert status["dropped_seconds"] == round(client.dropped_seconds, 1)
