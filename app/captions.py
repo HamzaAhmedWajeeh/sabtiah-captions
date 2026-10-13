@@ -46,6 +46,30 @@ TRANSLATION = "translation"
 #: boundary. Roughly a few lines on a phone at the audience page's base size.
 MAX_PARAGRAPH_CHARS = 360
 
+#: Sentence terminators the soft break prefers to cut at, so a paragraph does
+#: not end mid-sentence ("...AlphaFold / at the time..." on the phone test of
+#: 2026-10-13). Arabic uses `.` as a full stop and `؟` as a question mark.
+SENTENCE_ENDERS = ".?!؟"
+
+#: A weaker fallback, used only when a paragraph holds no sentence terminator
+#: at all. The Arabic comma is a much stronger pause than the English one -
+#: it often separates clauses that stand alone - and it is the only comma in
+#: this set on purpose: `,` is so frequent in the English stream (87 of them
+#: in run1 against 59 full stops) that allowing it would cut most paragraphs
+#: at a comma instead of a sentence end.
+CLAUSE_ENDERS = "،"
+
+#: Characters a sentence may legitimately close with *after* its terminator.
+#: A cut lands after these, so reported speech is not split from its own
+#: closing quote.
+CLOSERS = "\"')]»”’"
+
+#: How far into a paragraph a cut must land to be worth taking, as a fraction
+#: of the size budget. Without this, a full stop five characters in would
+#: produce a five-character paragraph and leave the rest to be hard-broken
+#: anyway, which is worse than the behaviour being fixed.
+MIN_BREAK_FRACTION = 0.5
+
 #: BUILD_SPEC section 6: "keep the last 200 segments". Counted per stream, and
 #: counted *after* soft splitting, or a single endpoint-free talk would sit
 #: forever in one uncapped paragraph.
@@ -106,6 +130,14 @@ class CaptionState:
         }
         self.seq = 0
         self.live = False
+        #: The engine's own health, which is *not* `live`. BUILD_SPEC Phase 5:
+        #: "Mark the stream `live:false` only when the operator stops it, not
+        #: during reconnects." A page that went grey every time the socket to
+        #: Soniox blinked would look broken during the one event this project
+        #: is designed to survive, so a drop changes this instead and the page
+        #: keeps the captions it has with a small indicator.
+        #: One of `idle`, `connecting`, `live`, `reconnecting`, `paused`.
+        self.status = "idle"
         self._next_id = 1
         # An endpoint closes the original paragraph immediately, but the
         # translated side has no end marker of its own (Phase 1 question 2), so
@@ -121,6 +153,41 @@ class CaptionState:
         if live != self.live:
             self.live = live
             self.seq += 1
+
+    def set_status(self, status: str) -> bool:
+        """Record the engine's health. True if it changed.
+
+        Separate from `set_live` on purpose - see the note on `self.status`.
+        """
+        if status == self.status:
+            return False
+        self.status = status
+        self.seq += 1
+        return True
+
+    def finalize_partials(self) -> bool:
+        """Commit every open partial as final text. True if anything changed.
+
+        Called when the engine connection drops (BUILD_SPEC Phase 5). A
+        partial is text Soniox had not committed to, drawn grey on the page,
+        and it is only ever cleared by the *next* response - so after a drop
+        it would sit there grey for as long as the reconnect takes, and if the
+        reconnect replays audio from before it, arrive a second time.
+
+        Committing it as-is is the honest option: it is what the audience has
+        already read, and the alternative is deleting words from the screen.
+        """
+        changed = False
+        for language in self.languages:
+            tail = self._tail(language)
+            if tail is None or not tail.partial:
+                continue
+            self.seq += 1
+            tail.final += tail.partial
+            tail.partial = ""
+            tail.changed_seq = self.seq
+            changed = True
+        return changed
 
     def add_response(self, response: dict) -> bool:
         """Fold one Soniox response in. True if anything a viewer sees changed.
@@ -179,6 +246,7 @@ class CaptionState:
             "type": "snapshot",
             "seq": self.seq,
             "live": self.live,
+            "status": self.status,
             "streams": {
                 lang: [p.as_dict() for p in paras]
                 for lang, paras in self.streams.items()
@@ -199,6 +267,7 @@ class CaptionState:
             "seq": self.seq,
             "base": seq,
             "live": self.live,
+            "status": self.status,
             "streams": {
                 lang: [p.as_dict() for p in paras if p.changed_seq > seq]
                 for lang, paras in self.streams.items()
@@ -287,6 +356,67 @@ class CaptionState:
             self._pending_endpoints[other] += 1
         return closed
 
+    def _sentence_cut(self, final: str) -> int | None:
+        """Where to cut `final` so the paragraph ends at a sentence end.
+
+        Returns an index to split at - everything before it stays, everything
+        from it moves on - or None if there is nothing better than a hard cut.
+
+        Searches backwards from the end, so the cut is the *last* sentence end
+        before the size limit rather than the first one past some minimum.
+        That keeps paragraphs close to the budget the audience page was tuned
+        against; breaking at the earliest opportunity would make every
+        paragraph about half the intended size.
+
+        A terminator only counts when a space follows it, possibly through a
+        closing quote or bracket - `run5-english` has reported speech ending
+        `no one has been." ` and the cut belongs after the quote, not before
+        it. Requiring the space is what keeps "3.5" and "stt-rt-v5." apart,
+        and it is cheap. It does not save "Dr. Smith" - an abbreviation is
+        indistinguishable from a sentence end without a dictionary, and the
+        cost of getting that wrong is a paragraph that breaks one word early,
+        not a word cut in half.
+        """
+        floor = int(self.max_paragraph_chars * MIN_BREAK_FRACTION)
+        if len(final) <= floor:
+            return None
+        # Strong terminators first, and only then the clause fallback: a
+        # paragraph that can end on a full stop should never end on a comma.
+        for enders in (SENTENCE_ENDERS, CLAUSE_ENDERS):
+            for index in range(len(final) - 1, floor - 1, -1):
+                if final[index] not in enders:
+                    continue
+                after = index + 1
+                while (after < len(final) and after - index <= len(CLOSERS)
+                       and final[after] in CLOSERS):
+                    after += 1
+                if final[after:after + 1] == " ":
+                    return after
+        return None
+
+    def _break(self, language: str, para: "Paragraph", seq: int) -> None:
+        """Close `para` at a sentence end if it has one, otherwise as-is.
+
+        The cut is retroactive: the text after the last sentence end has
+        already been appended, and is moved into the new paragraph. That is
+        visible on the page as the last line or so of a block dropping into
+        the block below, once per paragraph. It is a deliberate trade for
+        never ending a block mid-sentence, and it costs nothing in the
+        protocol - a diff carries each paragraph's full text keyed by `id`
+        (`diff_since`), so a paragraph getting *shorter* is an ordinary
+        update, not a special case.
+        """
+        cut = self._sentence_cut(para.final)
+        carry = ""
+        if cut is not None:
+            carry = para.final[cut:].lstrip()
+            para.final = para.final[:cut]
+        self._close(language, seq)
+        if carry:
+            moved = self._open(language, seq)
+            moved.final = carry
+            moved.changed_seq = seq
+
     def _append_final(
         self, language: str, text: str, seq: int, is_translation: bool
     ) -> None:
@@ -316,7 +446,7 @@ class CaptionState:
             and len(para.final) >= self.max_paragraph_chars
             and text.startswith(" ")
         ):
-            self._close(language, seq)
+            self._break(language, para, seq)
             para = self._open(language, seq)
 
         if not para.final:

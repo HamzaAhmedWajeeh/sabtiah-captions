@@ -31,6 +31,7 @@
     channel: document.getElementById('channel'),
     refreshDevices: document.getElementById('refresh-devices'),
     record: document.getElementById('record'),
+    arm: document.getElementById('arm'),
     paced: document.getElementById('paced'),
     start: document.getElementById('start'),
     stop: document.getElementById('stop'),
@@ -48,6 +49,11 @@
     shed: document.getElementById('s-shed'),
     audioDropped: document.getElementById('s-audio-dropped'),
     recording: document.getElementById('s-recording'),
+    engine: document.getElementById('s-engine'),
+    lag: document.getElementById('s-lag'),
+    retries: document.getElementById('s-retries'),
+    silence: document.getElementById('s-silence'),
+    thisRun: document.getElementById('s-this-run'),
     error: document.getElementById('s-error'),
     spend: document.getElementById('s-spend'),
     free: document.getElementById('s-free'),
@@ -60,7 +66,10 @@
     mic: 'Live capture, Phase 4. Audio is measured and discarded — there ' +
          'are no captions until the engine client lands in Phase 5.',
     file: 'Plays a recording through the capture path at real time. Same ' +
-          'as the microphone, minus the microphone.'
+          'as the microphone, minus the microphone.',
+    live: 'The real thing, and the only option here that costs money. ' +
+          'Captions reach the phones. Ten minutes of silence ends the ' +
+          'stream by itself and shows "paused"; the next sound resumes it.'
   };
 
   function url(path, extra) {
@@ -160,6 +169,17 @@
     els.audioDropped.textContent = status.dropped_chunks === undefined
       ? '—' : status.dropped_chunks + ' chunk(s)';
     els.recording.textContent = status.recording || 'off';
+    els.engine.textContent = status.engine_state || '—';
+    els.engine.className = status.engine_state === 'reconnecting'
+      ? 'error' : '';
+    els.lag.textContent = status.lag_seconds === undefined
+      ? '—' : status.lag_seconds.toFixed(2) + ' s';
+    els.retries.textContent = status.reconnects === undefined
+      ? '—' : status.reconnects + ' / ' + status.rollovers;
+    els.silence.textContent = status.silent_seconds === undefined
+      ? '—' : status.silent_seconds.toFixed(0) + ' s';
+    els.thisRun.textContent = status.streamed_seconds === undefined
+      ? '—' : (status.streamed_seconds / 60).toFixed(2) + ' min';
     els.error.textContent = status.error || 'none';
     els.error.className = status.error ? 'error' : '';
     els.start.disabled = !!status.running;
@@ -246,7 +266,14 @@
     } else if (current === 'file') {
       if (!els.file.value) { return; }
       params.file = els.file.value;
-    } else if (current === 'mic') {
+    } else if (current === 'mic' || current === 'live') {
+      if (current === 'live' && !els.arm.checked) {
+        /* Two deliberate actions before any credit is spent. A checkbox
+         * rather than a confirm() dialog: a modal blocks every later
+         * instruction the page receives, including the Stop button. */
+        fail('tick "I mean it" first — a live run spends credit');
+        return;
+      }
       if (els.device.value !== '') { params.device = els.device.value; }
       params.channel = els.channel.value || '1';
     }

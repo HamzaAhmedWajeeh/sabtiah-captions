@@ -48,6 +48,10 @@
     var seq = 0;
     var live = false;
     var status = 'connecting';
+    /* Engine states worth showing the audience. `connecting` and `live` are
+     * not here: a page that flickered on the first second of every session
+     * would be worse than one that simply says "live". */
+    var ENGINE_TROUBLE = { reconnecting: 'reconnecting', paused: 'paused' };
     var socket = null;
     var attempt = 0;
     var timer = null;
@@ -106,7 +110,13 @@
 
       seq = typeof message.seq === 'number' ? message.seq : seq;
       live = !!message.live;
-      setStatus(live ? 'live' : 'idle');
+      /* Two different things can be wrong, and they are not the same thing:
+       * this page's own socket, and the server's connection to the engine.
+       * `message.status` is the second one (BUILD_SPEC Phase 5) - when the
+       * engine is reconnecting the talk has not ended, so `live` stays true
+       * and the chip shows the engine's trouble rather than going to
+       * "not live". */
+      setStatus(live ? (ENGINE_TROUBLE[message.status] || 'live') : 'idle');
       handlers.onApplied(live);
     }
 
@@ -255,6 +265,7 @@
       connecting: 'connecting',
       reconnecting: 'reconnecting',
       live: 'live',
+      paused: 'paused',
       idle: 'not live',
       disclaimer: 'Live auto-translation. May contain mistakes.',
       waiting: 'No session live right now. Captions start when the talk does.',
@@ -264,6 +275,7 @@
       connecting: 'جارٍ الاتصال',
       reconnecting: 'إعادة الاتصال',
       live: 'مباشر',
+      paused: 'مُلبَث',
       idle: 'غير مباشر',
       disclaimer: 'ترجمة آلية مباشرة، قد تحتوي على أخطاء.',
       waiting: 'لا توجد جلسة مباشرة الآن. تبدأ الترجمة مع بداية الحديث.',

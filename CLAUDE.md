@@ -4,12 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-**Phases 0–4 are done. Phase 5 (resilience, the real Soniox client) is next.**
+**Phases 0–5 are done. Phase 6 (operator page, context, glossary) is next.**
+
+**No live run has ever happened.** Phase 5 is tested end to end against a scripted socket; the four acceptance checks in `docs/resilience-test.md` have their offline halves done and their live halves outstanding. Ask Hamza before the first live run.
 
 - **Phase 1 is answered**, with five captures in `docs/captures/` and the findings in `docs/soniox-notes.md`. Read that file before touching caption logic — several of its measurements contradict assumptions in BUILD_SPEC section 3 and section 6.
 - **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. It paces a capture at real time, so the pages can be judged at true speed.
 - **Phase 3** is `app/broadcast.py` (viewer hub), `app/main.py` (routes, `/ws`, the replay session) and the three pages in `web/`.
-- **Phase 4** is `app/audio_source.py` (`MicSource`, `FileSource`), `tools/list_devices.py`, the admin level meter and `app/usage.py` (the `logs/usage.jsonl` spend ledger). **206 tests, all offline.** Build Phase 5 against `FakeSonioxClient` too. There are now two feeds in `app/main.py` and the real client is a sibling of both: `_run_replay` knows where responses come from, `_run_audio` knows where audio comes from, and Phase 5 is the piece between them.
+- **Phase 4** is `app/audio_source.py` (`MicSource`, `FileSource`), `tools/list_devices.py`, the admin level meter and `app/usage.py` (the `logs/usage.jsonl` spend ledger).
+- **Phase 5** is `app/soniox_client.py`: ring buffer, backoff, error classification, keepalive, rollover, idle auto-stop. **279 tests, all offline** — it takes its `connect` as an argument and imports `websockets` lazily, so no test can reach Soniox even by accident. Keep it that way.
 - **`docs/CHECKPOINT.md` is the short version**: what is done, what is next, the open items, and Soniox audio spent (**22.0 minutes** of the $10 budget so far).
 - Two findings matter most for the phases ahead. **Endpoint detection can effectively never fire** — `run4-saudi` gave one `<end>` in 300 s — so `<end>` is not a reliable paragraph break and `captions.py` adds a soft size break. And **nothing stays in Latin script in Arabic captions**: `RAG`/`MCP`/`LLM` get transliterated in the `en`→`ar` direction. The `translation_terms` fix in `config/glossary.yaml` is untested and is the highest-value remaining experiment.
 
@@ -87,6 +90,7 @@ Key design seams:
 Full details in spec section 3; these are the ones that silently corrupt output:
 
 - **Final tokens are sent once — append them. Non-final tokens are re-sent in full every response — replace them.** Appending non-finals duplicates text.
+- **A graceful end and an error both end the stream, and they are told apart by *which task finished*, not by the message.** When the client sends the empty text frame on purpose (rollover, idle pause), the server answers `{"finished": true}` and both the sender and receiver complete. Ask the sender why it stopped first; reading the receiver first turns a rollover into "the talk ended". See `app/soniox_client._one_connection`.
 - Endpoint detection emits a final token with text `"<end>"`. It is a segment boundary, never display it.
 - Auth is the `Authorization: Bearer` **header**; `api_key` in the config message is deprecated and refused from 15 Jan 2027.
 - Config is the first **text** frame; audio frames are **binary**. End gracefully with an empty text frame (`""`), then wait for `{"finished": true}`.

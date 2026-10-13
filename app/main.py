@@ -35,6 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app import usage
 from app.audio_source import AudioSource, FileSource, MicSource, describe_devices
+from app.soniox_client import PAUSED, RECONNECTING, STREAMING, SonioxClient
 from app.broadcast import BroadcastHub
 from app.captions import CaptionState
 from app.replay import FakeSonioxClient
@@ -88,6 +89,7 @@ class CaptionSession:
         self._task: asyncio.Task | None = None
         self._client: FakeSonioxClient | None = None
         self._audio: AudioSource | None = None
+        self._engine: SonioxClient | None = None
         self._logged = True
 
     @property
@@ -118,6 +120,7 @@ class CaptionSession:
         await self.stop()
         self.paced = paced
         self._audio = None
+        self._engine = None
         self._client = FakeSonioxClient(capture, paced=paced)
         self._begin(mode="replay", engine="replay", source=capture.name)
         self._task = asyncio.create_task(self._run_replay(self._client),
@@ -154,6 +157,7 @@ class CaptionSession:
         # claims to be running.
         await source.open()
         self._client = None
+        self._engine = None
         self._audio = source
         self.paced = getattr(source, "realtime", True)
         self._begin(mode=source.kind, engine="monitor",
@@ -175,6 +179,80 @@ class CaptionSession:
             seconds = source.audio_seconds
             await source.close()
             self._finish(seconds)
+
+    async def start_live(self, source: AudioSource, **client_kwargs) -> None:
+        """The real thing: microphone -> Soniox -> captions -> phones.
+
+        **This spends money.** Everything else in this class is free; this is
+        the only path that opens a connection to Soniox, and the usage line it
+        writes at the end is the billable one.
+        """
+        await self.stop()
+        if not settings.soniox_api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="SONIOX_API_KEY is not set; live transcription needs it",
+            )
+        await source.open()
+        self._audio = source
+        self._client = None
+        self.paced = True
+        client = SonioxClient(
+            source,
+            on_state=self._on_engine_state,
+            on_drop=self._on_engine_drop,
+            **client_kwargs,
+        )
+        self._engine = client
+        self._begin(mode=source.kind, engine="soniox", source=source.describe())
+        self.state.set_status("connecting")
+        self._task = asyncio.create_task(self._run_live(client), name="live")
+
+    def _on_engine_state(self, state: str) -> None:
+        """Mirror the engine's state onto the pages.
+
+        `live` deliberately does not change here (BUILD_SPEC Phase 5): a
+        reconnect must not make the audience page say the talk ended. Only
+        `stop()` clears `live`.
+        """
+        shown = {STREAMING: "live", RECONNECTING: "reconnecting",
+                 PAUSED: "paused"}.get(state, state)
+        if self.state.set_status(shown):
+            self.hub.notify()
+
+    def _on_engine_drop(self) -> None:
+        """A connection just died. Commit whatever was still grey.
+
+        Otherwise an uncommitted partial sits on every phone for the length of
+        the reconnect, and arrives a second time when the ring buffer replays
+        the audio that produced it.
+        """
+        if self.state.finalize_partials():
+            self.hub.notify()
+
+    async def _run_live(self, client: SonioxClient) -> None:
+        try:
+            async for response in client:
+                self.responses += 1
+                if self.state.add_response(response):
+                    self.hub.notify()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+        finally:
+            if client.last_error and not self.error:
+                self.error = "{}: {}".format(
+                    client.last_error.get("error_type"),
+                    client.last_error.get("error_message", ""),
+                ).strip(": ")
+            streamed = client.audio_seconds_sent
+            await client.close()
+            audio, self._audio = self._audio, None
+            if audio is not None:
+                await audio.close()
+            self.state.set_status("idle")
+            self._finish(streamed)
 
     def _finish(self, audio_seconds: float) -> None:
         """End of run: drop the live flag and write the usage line.
@@ -200,10 +278,16 @@ class CaptionSession:
         if task is not None and not task.done():
             task.cancel()
             await asyncio.wait({task})
+        engine, self._engine = self._engine, None
+        if engine is not None:
+            await engine.close()
         audio, self._audio = self._audio, None
+        if self._engine is not None:
+            status.update(self._engine.status())
         if audio is not None:
             await audio.close()
         self.state.set_live(False)
+        self.state.set_status("idle")
         self.hub.notify()
 
     async def shutdown(self) -> None:
@@ -217,7 +301,10 @@ class CaptionSession:
         status: dict[str, Any] = {
             "running": self.running,
             "mode": self.mode,
-            "engine": self.engine,
+            # `self.engine` is deliberately absent: it names the engine, and
+            # both the served static files and this payload are checked
+            # against that name (BUILD_SPEC section 8). `engine_state` below
+            # carries everything the operator actually needs.
             "source": self.source,
             "paced": self.paced,
             "responses": self.responses,
@@ -233,6 +320,10 @@ class CaptionSession:
             "usage": usage.totals().as_dict(),
             **self.hub.status(),
         }
+        if self._engine is not None:
+            status.update(self._engine.status())
+        if self._engine is not None:
+            status.update(self._engine.status())
         if audio is not None:
             # A live source overrides `audio_ms`: for mic and file runs it is
             # audio actually captured, not a position in a recording. Only a
@@ -466,9 +557,30 @@ async def admin_start(
             FileSource(resolve_audio(file), realtime=paced,
                        channel=channel, record=record)
         )
+    elif source == "live":
+        # The only route in this file that spends money. One shape, one
+        # source: the microphone. Streaming a saved file to the engine is
+        # what `tools/probe_soniox.py` is for, and keeping it out of here
+        # means there is exactly one way to start billing.
+        try:
+            mic = MicSource(device, channel=channel, record=record)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"could not open device {device}: {exc}",
+            ) from exc
+        try:
+            await session.start_live(mic)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"could not start live transcription: {exc}",
+            ) from exc
     else:
         raise HTTPException(status_code=400, detail="source must be "
-                                                   "replay, mic or file")
+                                                   "replay, mic, file or live")
     return JSONResponse(session.status(), headers=NO_STORE)
 
 

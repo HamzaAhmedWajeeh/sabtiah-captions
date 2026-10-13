@@ -241,12 +241,26 @@ def test_the_audience_pages_never_link_to_admin():
         assert "/admin" not in text, f"{name} points at the operator page"
 
 
-def test_the_env_example_is_the_only_place_a_key_is_named():
-    """The repo must not have gained a committed key while Phase 3 landed."""
+def test_no_credential_is_written_into_the_source():
+    """The repo must not have gained a committed key.
+
+    Phase 3 wrote this as "`Bearer ` appears nowhere in `app/`", which worked
+    only while nothing in `app/` authenticated. Phase 5's client has to build
+    that header - it is the documented auth mechanism (spec section 3) - so
+    the check now enforces the actual invariant from CLAUDE.md: the key lives
+    in `.env` and nowhere else. Every `Bearer` must be built from the setting
+    on the spot, never from a literal.
+    """
     for path in (ROOT / "app").glob("*.py"):
         text = path.read_text(encoding="utf-8")
         assert "sk-" not in text
-        assert "Bearer " not in text
+        for number, line in enumerate(text.splitlines(), 1):
+            if "Bearer" not in line:
+                continue
+            assert "api_key" in line, (
+                f"{path.name}:{number} names a bearer token without reading "
+                f"it from settings: {line.strip()!r}"
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -83,6 +83,9 @@ h1 {
 
 #state.live { color: #4ade80; }
 #state.reconnecting, #state.connecting { color: #fbbf24; }
+/* The engine stopped on purpose (ten minutes of silence), which is neither
+   trouble nor a live talk. */
+#state.paused { color: #94a3b8; }
 
 .disclaimer {
   margin: 0.15rem 0 0;
@@ -311,6 +314,8 @@ body.admin .meter-mark {
   width: 1px;
   background: var(--line);
 }
+
+body.admin .warn { color: #fbbf24; font-weight: 600; }
 
 body.admin .clip {
   color: #f87171;

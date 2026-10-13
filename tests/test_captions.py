@@ -24,7 +24,13 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.captions import CaptionState, Paragraph  # noqa: E402
+from app.captions import (  # noqa: E402
+    CLAUSE_ENDERS,
+    CLOSERS,
+    SENTENCE_ENDERS,
+    CaptionState,
+    Paragraph,
+)
 from app.replay import FakeSonioxClient, load_capture, responses  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -443,3 +449,199 @@ def test_captions_module_stays_pure():
     assert "async def" not in source
     # the builtin `open`, not this module's own `_open()` paragraph helper
     assert not re.search(r"(?<![\w.])open\(", source)
+
+
+# ---------------------------------------------------------------------------
+# The soft break lands on a sentence end (phone test, 2026-10-13)
+# ---------------------------------------------------------------------------
+#
+# Hamza read the captions on his phone and found the size break cutting
+# mid-sentence: "...AlphaFold / at the time...". The size budget still has to
+# hold, so the break now looks backwards for the last sentence end before the
+# limit and only cuts blind when there is none.
+
+
+def feed_words(state: CaptionState, text: str, language: str = "en") -> None:
+    """Feed `text` one word per response, as space-leading final tokens.
+
+    Space-leading because that is the only place a paragraph may be split
+    (finding 1), and one word per response because that is how the soft break
+    is actually reached in a live stream.
+    """
+    for word in text.split(" "):
+        state.add_response(response(token(" " + word, lang=language)))
+
+
+def closed_paragraphs(state: CaptionState, language: str) -> list[Paragraph]:
+    return [p for p in state.streams[language] if p.closed and p.final.strip()]
+
+
+def ends_a_sentence(text: str) -> bool:
+    stripped = text.strip().rstrip(CLOSERS)
+    return bool(stripped) and stripped[-1] in SENTENCE_ENDERS + CLAUSE_ENDERS
+
+
+def test_size_break_cuts_at_the_last_sentence_end_before_the_limit():
+    state = CaptionState(max_paragraph_chars=100)
+    feed_words(state, ("word " * 14 + "stop. " + "tail " * 12).strip())
+
+    paragraphs = state.streams["en"]
+    assert len(paragraphs) > 1
+    assert paragraphs[0].final.endswith("stop.")
+    # The text that had already been appended past the full stop moved down
+    # rather than being dropped.
+    assert paragraphs[1].final.startswith("tail")
+
+
+def test_size_break_prefers_the_latest_sentence_end_not_the_earliest():
+    """Breaking at the first opportunity would halve every paragraph.
+
+    The size budget was tuned against the audience page, so the cut should sit
+    as close under it as a sentence end allows.
+    """
+    state = CaptionState(max_paragraph_chars=200)
+    feed_words(
+        state,
+        ("word " * 12 + "early. " + "word " * 12 + "late. " + "tail " * 20).strip(),
+    )
+    assert state.streams["en"][0].final.endswith("late.")
+
+
+def test_a_full_stop_beats_a_later_arabic_comma():
+    """A paragraph that can end on a full stop should never end on a comma.
+
+    Both candidates have to sit past the halfway floor for the preference to
+    mean anything - a full stop below the floor is not a candidate at all, and
+    writing this test the other way round proved it: the comma won because the
+    full stop was at character 65 of a 200-character budget.
+    """
+    state = CaptionState(max_paragraph_chars=200)
+    feed_words(
+        state,
+        ("word " * 26 + "stop. " + "word " * 6 + "clause، " + "tail " * 40).strip(),
+    )
+    assert state.streams["en"][0].final.endswith("stop.")
+
+
+def test_the_arabic_comma_is_the_fallback_when_nothing_terminates():
+    state = CaptionState(max_paragraph_chars=100)
+    feed_words(
+        state,
+        ("كلمة " * 14 + "فاصلة، "
+         + "ذيل " * 15).strip(),
+        "ar",
+    )
+    assert state.streams["ar"][0].final.endswith("،")
+
+
+def test_a_cut_lands_after_a_closing_quote():
+    """`run5-english` reports speech as `no one has been." ` - the quote
+    belongs to the sentence it closes."""
+    state = CaptionState(max_paragraph_chars=100)
+    feed_words(state, ("word " * 14 + 'said." ' + "tail " * 12).strip())
+    assert state.streams["en"][0].final.endswith('said."')
+
+
+def test_a_decimal_point_is_not_a_sentence_end():
+    state = CaptionState(max_paragraph_chars=100)
+    feed_words(state, ("word " * 14 + "3.5 " + "tail " * 12).strip())
+    first = state.streams["en"][0]
+    assert not first.final.endswith("3.")
+    assert "3.5" in " ".join(p.final for p in state.streams["en"])
+
+
+def test_a_sentence_end_too_early_in_the_paragraph_is_not_used():
+    """A full stop five characters in would leave a five-character paragraph
+    and hard-break the rest anyway - worse than the behaviour being fixed."""
+    state = CaptionState(max_paragraph_chars=100)
+    feed_words(state, ("hi. " + "word " * 40).strip())
+    first = state.streams["en"][0]
+    assert first.final != "hi."
+    assert len(first.final) >= 100
+
+
+def test_size_break_still_falls_back_to_a_word_boundary():
+    """No terminator anywhere: the old behaviour, and still no split words."""
+    state = CaptionState(max_paragraph_chars=100)
+    feed_words(state, ("word " * 60).strip())
+    paragraphs = closed_paragraphs(state, "en")
+    assert len(paragraphs) > 1
+    for para in paragraphs:
+        assert para.final.endswith("word")
+        assert "wor d" not in para.final
+
+
+def test_the_retroactive_cut_loses_no_text():
+    """The moved tail is the whole point of the risk, so pin it directly."""
+    state = CaptionState(max_paragraph_chars=100)
+    text = ("word " * 14 + "stop. " + "tail " * 12).strip()
+    feed_words(state, text)
+    rejoined = " ".join(p.final for p in state.streams["en"]).split()
+    assert rejoined == text.split()
+
+
+def test_a_shortened_paragraph_is_sent_in_the_diff():
+    """The cut makes an already-broadcast paragraph *shorter*.
+
+    `diff_since` sends each changed paragraph's full text keyed by `id`, so
+    this needs no protocol change - but it does need the shortened paragraph
+    to be in the diff, or a phone keeps the longer version for ever.
+    """
+    state = CaptionState(max_paragraph_chars=100)
+    feed_words(state, ("word " * 14 + "stop. " + "tail " * 2).strip())
+    first = state.streams["en"][0]
+    assert not first.closed  # not broken yet
+    long_version = first.final
+    mark = state.seq
+
+    feed_words(state, ("tail " * 12).strip())
+
+    diff = state.diff_since(mark)
+    sent = {p["id"]: p["final"] for p in diff["streams"]["en"]}
+    assert first.id in sent, "the shortened paragraph was not re-sent"
+    assert len(sent[first.id]) < len(long_version)
+    assert sent[first.id].endswith("stop.")
+
+
+@pytest.mark.parametrize("name", ALL_FIXTURES)
+@pytest.mark.parametrize("language", ["ar", "en"])
+def test_most_paragraphs_end_at_a_sentence_boundary(name, language):
+    """The measurement that answers the phone test, on the real captures.
+
+    Not "all": a paragraph with no terminator past the halfway floor still
+    has to be cut somewhere, and `run4-saudi`'s English stream has one such
+    span. Paragraphs closed by an `<end>` land wherever the speaker paused
+    and are not this break's business either, which is the rest of the
+    shortfall. Across the four captures the figure is 79 of 80 size-broken
+    paragraphs; the floor here leaves room for the endpoint-closed ones.
+    """
+    state = replay(name)
+    paragraphs = closed_paragraphs(state, language)
+    assert paragraphs, "nothing closed; the premise of this test is gone"
+    good = sum(1 for p in paragraphs if ends_a_sentence(p.final))
+    assert good / len(paragraphs) >= 0.85, (
+        f"{good}/{len(paragraphs)} paragraphs end at a sentence boundary: "
+        + repr([p.final[-40:] for p in paragraphs if not ends_a_sentence(p.final)])
+    )
+
+
+@pytest.mark.parametrize("name", ALL_FIXTURES)
+@pytest.mark.parametrize("language", ["ar", "en"])
+def test_a_hard_break_only_happens_when_no_cut_was_available(name, language):
+    """Every blind cut has to be justified, not merely rare.
+
+    For a paragraph the size break closed, either it ends at a sentence end or
+    `_sentence_cut` can find nothing in it - which is exactly the condition
+    the code used. Paragraphs shorter than the budget were closed by an
+    `<end>` instead and are excluded.
+    """
+    state = replay(name)
+    for para in closed_paragraphs(state, language):
+        if len(para.final) < state.max_paragraph_chars:
+            continue  # closed by an endpoint, not by size
+        if ends_a_sentence(para.final):
+            continue
+        assert state._sentence_cut(para.final) is None, (
+            f"paragraph {para.id} was hard-broken but a cut existed: "
+            f"{para.final[-60:]!r}"
+        )

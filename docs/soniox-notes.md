@@ -503,6 +503,37 @@ and there is nothing to be done about it at the engine level.
 Segment 10's entire content. A filler syllable became a word. Short segments
 are where the noise lives.
 
+## Proper nouns: fill `speakers` in `config/session.yaml`
+
+**Names are the weak spot, and the fix is free.** `جودت` (the surname Gawdat)
+came back as `Goudat` in run1. Nothing downstream can repair that —
+`captions.py` only ever sees the text Soniox sends, so a misheard name is a
+misheard name on every phone in the room.
+
+Soniox takes a `context` object per connection, and `config/session.yaml`'s
+`speakers` list is what feeds it. It was **empty for all five Phase 1
+captures**, which is why `Goudat` is in the transcript. Filling it in costs
+nothing and spends no credit:
+
+```yaml
+title: "Agents in production"
+speakers: ["Mo Gawdat", "جودت", "Hamza Wajeeh"]
+companies: ["Cycls", "Sabtiah"]
+```
+
+Three things worth knowing when filling it:
+
+- **Both scripts help.** A name the speakers say in Arabic and the slides show
+  in Latin is two different recognition problems; list both spellings.
+- **It applies on the next Start**, not immediately — Soniox context is set in
+  the config frame when a connection opens (BUILD_SPEC section 3). Editing it
+  mid-talk does nothing until the session restarts.
+- **Untested, but free.** No capture has run *with* `speakers` populated, so
+  the improvement is inferred from how the `context` object is documented and
+  from the one glossary hit that was measurable (`agents`). Unlike the
+  `translation_terms` experiment it needs no API call to try: fill it in before
+  the next run and read the names in the output.
+
 ## Did the glossary make a visible difference?
 
 **Yes, but barely, and on one word.** The honest answer is that this audio

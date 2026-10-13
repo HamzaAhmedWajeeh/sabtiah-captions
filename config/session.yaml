@@ -1,4 +1,12 @@
 # This Saturday's talk. Edited from /admin; applied on the next Start.
+#
+# `speakers` is the cheapest quality win available and is currently unused.
+# It feeds the Soniox `context` object, and proper nouns are where recognition
+# fails: with this list empty, run1 rendered the surname Gawdat as "Goudat"
+# and nothing downstream can repair that. List both scripts for a name that
+# gets said in Arabic and written in Latin. Applied when a connection opens,
+# so an edit mid-talk takes effect on the next Start.
+# See docs/soniox-notes.md, "Proper nouns".
 title: ""
 speakers: []
 companies: []

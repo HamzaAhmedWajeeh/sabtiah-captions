@@ -25,6 +25,7 @@
           <option value="replay">Replay a capture — captions</option>
           <option value="mic">Microphone — audio only</option>
           <option value="file">Recording — audio only</option>
+          <option value="live">Live captions — microphone, SPENDS CREDIT</option>
         </select>
       </label>
       <label>
@@ -41,7 +42,14 @@
       </label>
     </div>
 
-    <div class="row" data-for="mic">
+    <div class="row" data-for="live">
+      <label class="warn">
+        <input type="checkbox" id="arm">
+        I mean it — stream to the API and spend credit
+      </label>
+    </div>
+
+    <div class="row" data-for="mic live">
       <label>Device
         <select id="device"></select>
       </label>
@@ -57,7 +65,7 @@
       </label>
     </div>
 
-    <div class="row" data-for="mic file">
+    <div class="row" data-for="mic file live">
       <label>
         <input type="checkbox" id="record">
         Record this run to <code>recordings/</code>
@@ -101,6 +109,10 @@
         <tr><th>Refused / dropped</th><td id="s-shed">—</td></tr>
         <tr><th>Audio dropped</th><td id="s-audio-dropped">—</td></tr>
         <tr><th>Recording</th><td id="s-recording">—</td></tr>
+        <tr><th>Connection</th><td id="s-engine">—</td></tr>
+        <tr><th>Caption delay</th><td id="s-lag">—</td></tr>
+        <tr><th>Reconnects / rollovers</th><td id="s-retries">—</td></tr>
+        <tr><th>Silence</th><td id="s-silence">—</td></tr>
         <tr><th>Last error</th><td id="s-error">—</td></tr>
       </tbody>
     </table>
@@ -111,6 +123,7 @@
     <table>
       <tbody>
         <tr><th>Streamed to the engine</th><td id="s-spend">—</td></tr>
+        <tr><th>This run</th><td id="s-this-run">—</td></tr>
         <tr><th>Free runs (replay, mic)</th><td id="s-free">—</td></tr>
         <tr><th>Runs logged</th><td id="s-runs">—</td></tr>
       </tbody>

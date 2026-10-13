@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 from app import main as server  # noqa: E402
 from app import audio_source  # noqa: E402
 from app import usage  # noqa: E402
-from app.audio_source import SAMPLE_RATE  # noqa: E402
+from app.audio_source import SAMPLE_RATE, FileSource  # noqa: E402
 from app.main import (  # noqa: E402
     CaptionSession,
     admin_devices,
@@ -41,8 +41,35 @@ from app.main import (  # noqa: E402
     resolve_audio,
 )
 from app.settings import settings  # noqa: E402
+from test_soniox_client import (  # noqa: E402
+    DropsOnce,
+    ErrorsOnce,
+    FakeServer,
+    FakeSocket,
+)
 
 TOKEN = "s3cret-operator-token"
+
+
+class PartialsThenDrop(FakeServer):
+    """Sends an uncommitted partial, then drops - the grey-line case.
+
+    A partial is text Soniox has not committed to. It is only ever cleared by
+    the next response, so after a drop it sits grey on every phone until the
+    reconnect finishes.
+    """
+
+    async def on_audio(self, socket: FakeSocket, chunk: bytes) -> None:
+        self.acked_ms[socket] = self.acked_ms.get(socket, 0) + 100
+        socket.reply({
+            "tokens": [{
+                "text": "uncommitted", "is_final": False, "language": "en",
+                "translation_status": "original",
+            }],
+            "final_audio_proc_ms": self.acked_ms[socket],
+        })
+        if self.connections == 1 and len(socket.sent_audio) >= 2:
+            socket.drop()
 
 
 @pytest.fixture(autouse=True)
@@ -363,3 +390,157 @@ async def test_devices_endpoint_survives_a_machine_with_no_audio(monkeypatch):
     monkeypatch.setitem(sys.modules, "sounddevice", None)
     body = json.loads((await admin_devices(token=TOKEN)).body)
     assert body == {"devices": []}
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 through the server: the one path that spends money
+# ---------------------------------------------------------------------------
+
+
+async def test_a_live_run_produces_captions_and_a_billable_ledger_line(
+    fresh_session, recordings, quarantine_usage_log, monkeypatch
+):
+    """The whole pipeline, with the socket faked: audio -> engine -> captions.
+
+    This is the only shape in the project that would cost money, so it is
+    also the only place the ledger writes `billable: true`. The fake server
+    is the one from `test_soniox_client`.
+    """
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    server = FakeServer()
+    source = FileSource(recordings / "tone.wav", realtime=False)
+
+    await fresh_session.start_live(source, connect=server, api_key="test-key")
+    await finish(fresh_session)
+
+    assert fresh_session.error is None
+    assert fresh_session.state.render("en").strip().startswith("word")
+    assert server.connections == 1
+
+    totals = usage.totals(quarantine_usage_log)
+    assert totals.billable_runs == 1
+    assert totals.billable_seconds == pytest.approx(0.5, abs=0.2)
+    assert totals.last["engine"] == "soniox"
+
+
+async def test_a_live_run_without_a_key_is_refused_before_connecting(
+    fresh_session, recordings, monkeypatch
+):
+    monkeypatch.setattr(settings, "soniox_api_key", "")
+    with pytest.raises(HTTPException) as raised:
+        await admin_start(token=TOKEN, source="live", device=0)
+    assert raised.value.status_code == 400
+    assert fresh_session.running is False
+
+
+async def test_the_engine_state_reaches_the_pages_without_clearing_live(
+    fresh_session, recordings, monkeypatch
+):
+    """BUILD_SPEC Phase 5: a reconnect must not look like the end of the talk.
+
+    `live` is the operator's flag; `status` is the engine's. A page that went
+    grey on every blink would look broken during the one event this project
+    exists to survive.
+    """
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    server = DropsOnce(after=2)
+    source = FileSource(recordings / "tone.wav", realtime=True)
+
+    await fresh_session.start_live(source, connect=server, api_key="test-key")
+    seen = set()
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        seen.add(fresh_session.state.status)
+        assert fresh_session.state.live is True, "live was cleared by a drop"
+        if server.connections >= 2 and fresh_session.state.status == "live":
+            break
+    await admin_stop(token=TOKEN)
+
+    assert "reconnecting" in seen, f"pages never saw a reconnect: {seen}"
+    assert "live" in seen
+    # Only the operator clears it.
+    assert fresh_session.state.live is False
+
+
+async def test_a_drop_commits_the_grey_text_rather_than_leaving_it_hanging(
+    fresh_session, recordings, monkeypatch
+):
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    server = PartialsThenDrop()
+    source = FileSource(recordings / "tone.wav", realtime=True)
+
+    await fresh_session.start_live(source, connect=server, api_key="test-key")
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if server.connections >= 2:
+            break
+    await admin_stop(token=TOKEN)
+
+    # The grey text was committed to `final`. Checking `partial` is empty
+    # here would be wrong: the second connection is sending partials of its
+    # own by now, which is exactly what it should be doing.
+    paragraphs = fresh_session.state.streams["en"]
+    assert any("uncommitted" in p.final for p in paragraphs), (
+        "the partial was never committed: "
+        + repr([(p.final, p.partial) for p in paragraphs])
+    )
+
+
+async def test_a_fatal_error_stops_the_session_and_shows_up_on_admin(
+    fresh_session, recordings, monkeypatch
+):
+    """Acceptance 3: "admin shows a clear error, no retry loop"."""
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    server = ErrorsOnce("unauthenticated")
+    source = FileSource(recordings / "tone.wav", realtime=False)
+
+    await fresh_session.start_live(source, connect=server, api_key="bad-key")
+    await finish(fresh_session)
+
+    assert server.connections == 1, "it retried a fatal error"
+    body = json.loads((await admin_status(token=TOKEN)).body)
+    assert "unauthenticated" in (body["error"] or "")
+    assert body["engine_error"]["fatal"] is True
+    assert body["running"] is False
+
+
+async def test_the_served_status_still_names_no_engine_during_a_live_run(
+    fresh_session, recordings, monkeypatch
+):
+    """The Phase 3 invariant has to survive the phase that adds the engine."""
+    monkeypatch.setattr(settings, "soniox_api_key", "super-secret-key")
+    server = FakeServer()
+    source = FileSource(recordings / "tone.wav", realtime=True)
+
+    await fresh_session.start_live(source, connect=server, api_key="super-secret-key")
+    await asyncio.sleep(0.05)
+    body = json.loads((await admin_status(token=TOKEN)).body)
+    await admin_stop(token=TOKEN)
+
+    dumped = json.dumps(body).lower()
+    assert "soniox" not in dumped
+    assert "super-secret-key" not in dumped
+    assert "bearer" not in dumped
+    # and it does carry what the operator needs
+    assert body["engine_state"] in ("connecting", "streaming", "stopped")
+    assert "lag_seconds" in body and "streamed_seconds" in body
+
+
+async def test_stopping_a_live_run_closes_the_socket_and_the_device(
+    fresh_session, recordings, monkeypatch
+):
+    """The stream must stop when the session stops (CLAUDE.md)."""
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    server = FakeServer()
+    source = FileSource(recordings / "tone.wav", realtime=True)
+
+    await fresh_session.start_live(source, connect=server, api_key="test-key")
+    await asyncio.sleep(0.05)
+    await admin_stop(token=TOKEN)
+
+    assert fresh_session.running is False
+    assert fresh_session.state.live is False
+    assert fresh_session.state.status == "idle"
+    assert server.sockets[0]._done is True
+    streamed = json.loads((await admin_status(token=TOKEN)).body)
+    assert streamed["running"] is False

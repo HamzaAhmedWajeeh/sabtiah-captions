@@ -1,4 +1,4 @@
-# Checkpoint — 2026-10-13
+# Checkpoint — 2026-10-13 (evening)
 
 **The plan changed.** Saturday Oct 17 is a **conversation with the Sabtiah
 organizer**, not a live demo. What it needs is a working demo on Hamza's
@@ -10,7 +10,12 @@ so Phase 5 resilience and the Phase 8 tunnel have a week more than they had
 this morning — and the thing to protect now is a phone that shows captions
 convincingly over Wi-Fi, which it does today off a replay.
 
-Phases 0–4 done. Phase 5 (resilience, the real Soniox client) next.
+**The phone test passed.** Hamza opened the audience page on his phone over
+the office Wi-Fi: page loaded, captions streamed, the English translation read
+well. Two fixes came out of it, both done and both free (below).
+
+Phases 0–5 done. Phase 6 (operator page, context, glossary) next — but the
+live confirmation of Phase 5 is outstanding and needs Hamza, see below.
 
 ## Done
 
@@ -24,10 +29,16 @@ Phases 0–4 done. Phase 5 (resilience, the real Soniox client) next.
   `web/`. Driven entirely by `FakeSonioxClient`.
 - **Phase 4** — `app/audio_source.py` (`MicSource`, `FileSource`),
   `tools/list_devices.py`, the admin level meter, `--record`, and
-  `app/usage.py` writing `logs/usage.jsonl`. Details below.
+  `app/usage.py` writing `logs/usage.jsonl`.
+- **Phase 5** — `app/soniox_client.py`: the real connection, with keepalive,
+  ring buffer, reconnect with backoff, error classification, rollover and the
+  idle auto-stop. Results and the outstanding live checks are in
+  **`docs/resilience-test.md`**.
 
-**206 tests green, all offline** — the 145 from Phases 2–3 plus 61 for
-Phase 4. No test touches the network.
+**279 tests green, all offline** — 145 from Phases 2–3, 61 for Phase 4, 73 for
+Phase 5 and the caption fix. No test touches the network: `SonioxClient` takes
+its `connect` as an argument and imports `websockets` lazily, so no test can
+dial Soniox even by accident.
 
 ## Soniox audio spent: 22.0 minutes — unchanged
 
@@ -99,8 +110,111 @@ meter moves with speech; clipping is visible".
   built-in mic cannot be driven into clipping without shouting into it; the
   real check is the venue interface with its gain up, and that is a run-day
   check with the USB box.
-- **Captions from a live mic** — **not possible yet.** It needs Phase 5. This
-  is the one acceptance item carried forward.
+- **Captions from a live mic** — the code path exists as of Phase 5 and is
+  tested against a fake socket end to end. **It has never run against the real
+  Soniox server.** That is the one outstanding item in the project.
+
+## The two fixes from the phone test
+
+**1. Paragraphs no longer break mid-sentence.** The size break used to cut at
+the first word boundary past 360 characters, which is what produced
+"AlphaFold / at the time...". It now looks *backwards* from the limit for the
+last sentence end — `.` `?` `!` `؟`, falling back to `،` only when there is no
+terminator at all — and cuts blind only when neither exists.
+
+Three details that are not obvious:
+
+- **The cut is retroactive.** The text after the last sentence end has already
+  been appended, so it moves into the new paragraph. On the page that reads as
+  the last line of a block dropping into the block below, once per paragraph.
+  It costs nothing in the protocol: a diff already carries each paragraph's
+  full text keyed by `id`, so a paragraph getting *shorter* is an ordinary
+  update. The alternative — breaking at the first sentence end past a minimum
+  — avoids the reflow but makes every paragraph about half the size the
+  audience page was tuned for.
+- **A terminator only counts with a space after it**, possibly through a
+  closing quote. That keeps `3.5` and `stt-rt-v5.` from splitting, and puts
+  the cut after the quote in `no one has been." `. It does not save
+  "Dr. Smith"; the cost there is a paragraph that ends one word early.
+- **A terminator in the first half of the budget is ignored.** Otherwise a full
+  stop five characters in would produce a five-character paragraph and
+  hard-break the rest anyway.
+
+Measured on the four captures: **79 of 80 size-broken paragraphs now end at a
+sentence boundary.** The one that does not is a 363-character span in
+`run4-saudi`'s English stream with no terminator past the halfway floor, and a
+test asserts that every blind cut is of exactly that kind.
+
+**2. `speakers` in `config/session.yaml` is now documented where it will be
+read** — a comment in the file itself, and a new "Proper nouns" section in
+`docs/soniox-notes.md`. Still empty, still free, still the cheapest quality win
+available: it is why run1 says `Goudat` for the surname Gawdat.
+
+## Phase 5: the real client
+
+`app/soniox_client.py` is an async iterator of response dicts — deliberately
+the same shape as `replay.FakeSonioxClient`, so `CaptionState` and the
+broadcast hub cannot tell which one they are attached to. `connect` is
+injected and `websockets` is imported lazily, which is what keeps all 279
+tests free and makes it impossible for a test to dial Soniox by accident.
+
+- **Ring buffer**, 20 s. On reconnect everything Soniox never acknowledged is
+  re-sent before live audio resumes. `final_audio_proc_ms` is per connection,
+  so it is mapped back to a global offset; that mapping is what makes the
+  resume point correct across repeated drops.
+- **Backoff** 0.5s, 1s, 2s, 4s, then 8s. Reset once a connection has carried a
+  response, so a later drop is treated as a new incident rather than the
+  continuation of a failing chain.
+- **All 14 documented `error_type` values classified**, asserted at import so
+  a future edit cannot drop or double-classify one. Unknown types are retried
+  but capped at three attempts, so an undocumented *fatal* error cannot loop.
+- **Keepalive** every 20 s when no audio is flowing.
+- **Idle auto-stop**: ten minutes under the silence threshold ends the stream
+  and shows `paused`. The resume on the next sound is not in the spec and a
+  talk needs it — nobody is watching `/admin` during a break.
+- **`live` never goes false on a drop.** Only the operator clears it. The
+  engine's health is a separate `status` field on the snapshot and diff, and
+  the audience page shows `reconnecting` or `paused` on the chip while keeping
+  the captions it already has. A drop also commits any uncommitted grey text,
+  so it does not hang there for the length of the reconnect and arrive twice
+  when the ring replays.
+
+### One deliberate deviation
+
+**Rollover closes before it opens.** The spec says "open a new connection,
+start sending, then close the old one gracefully". This closes gracefully
+first and replays the ring to cover the gap. The overlap costs a second
+connection's billing on every rollover and two live sockets to reason about,
+for a path that only runs after 280 minutes of streaming — and $10 does not
+buy 280 minutes, so the overlap would be untestable complexity guarding an
+event that cannot happen on this project.
+
+### Two bugs the tests caught
+
+- **A graceful end was read as the end of the talk.** When the client closes a
+  stream on purpose, Soniox answers `{"finished": true}` and both tasks finish;
+  reading the receiver's answer first meant a rollover looked like "the audio
+  ran out". Effect: the session would simply stop after 280 minutes, and the
+  idle pause would never resume. Both the rollover and pause tests fail
+  against the old ordering.
+- **`asyncio.sleep` does not advance the clock on Windows.** A 60-chunk
+  scripted stream ran inside a single `time.monotonic()` tick, so a scaled-down
+  idle timeout never fired while the detector was correct. The client now takes
+  its clock as an argument. Worth remembering for any timing test in this repo.
+
+### Two test changes worth knowing about
+
+- **The `Bearer ` ban was tightened, not dropped.** Phase 3 asserted the string
+  appeared nowhere in `app/`, which worked only while nothing in `app/`
+  authenticated. The header *is* the documented auth mechanism, so the test now
+  enforces the real invariant from CLAUDE.md: every `Bearer` must be built from
+  the setting on the same line, never from a literal, and `sk-` still appears
+  nowhere.
+- **The admin page says "the engine", not the engine's name.** CLAUDE.md's grep
+  of served files is blunt on purpose, and `/admin/status` is covered by the
+  same check, so `session.engine` is deliberately absent from the served
+  payload. `engine_state`, `lag_seconds` and `streamed_seconds` carry what the
+  operator needs.
 
 ## Phone test setup (checked today)
 
@@ -139,10 +253,11 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
   curl -X POST "http://127.0.0.1:8000/admin/start?token=<token>&capture=run1.jsonl&paced=true"
   ```
 
-**Not verified: an actual phone.** Everything above was checked from the
-laptop. Whether iOS Safari or Android Chrome renders it well at 360 px, and
-whether the firewall lets the phone in, are both open until a phone is
-pointed at that URL.
+**Verified on Hamza's phone on 2026-10-13**: the page loaded over the office
+Wi-Fi, captions streamed, and the English translation read well. That settles
+the firewall and the rendering at phone width. Still unverified: iOS Safari
+specifically (if the phone that was used is Android, or the other way round),
+and three phones at once.
 
 ## Two deliberate deviations from BUILD_SPEC
 
@@ -174,17 +289,34 @@ pointed at that URL.
    soon as `SONIOX_RATE_PER_MINUTE` is set in `.env` — one number from the
    Soniox console turns it on. Deliberately not guessed: a made-up rate
    printed to two decimal places reads as a measurement.
-3. **Saudi dialect is still unmeasured.** `recordings/saudi-5min.m4a` is MSA
+3. **No live run has ever happened.** Phase 5 is tested end to end against a
+   scripted socket, and `docs/resilience-test.md` lists the four BUILD_SPEC
+   acceptance checks with their offline halves done and their live halves
+   outstanding. One run of 2 minutes or less covers three of them. **Ask
+   before running it** - it is the first money this project has spent since
+   Phase 1.
+4. **The headset microphone reads silence.** Hamza asked for live tests on the
+   headset rather than the laptop array. It is device **17** (`Microphone
+   (HyperX Virtual Surround Sound)`, WASAPI, 48 kHz, 4 ch). Checked on
+   2026-10-13 with `--listen`: peak 0.001, no signal - and devices 8, 26 and
+   27 (the other HyperX and analog-jack entries) are silent too, while the
+   built-in array picked up room noise minutes earlier, so capture and
+   permissions are fine. The headset is not connected, not powered, or muted.
+   Plug it in and re-run `uv run python tools/list_devices.py --listen 5
+   --device 17` before the live test.
+5. **Saudi dialect is still unmeasured.** `recordings/saudi-5min.m4a` is MSA
    news register about Yemen with zero distinctively Saudi lexis. Needs
    casual Saudi conversation. The audience is Saudi; the only dialect
    measured is Egyptian.
-4. **Long sessions untested.** The 300-minute cap, the 280-minute rollover
-   and the 20 s keepalive have never run. Phase 5.
-5. **`config/session.yaml` is empty.** Filling `speakers` would likely fix
+6. **Long sessions untested against the real server.** The rollover, the
+   keepalive and the idle auto-stop all have tests, but none has run for real.
+   The 60-minute `FileSource` soak in BUILD_SPEC's acceptance 4 needs no
+   credit and has not been done.
+7. **`config/session.yaml` is empty.** Filling `speakers` would likely fix
    `جودت` → "Goudat" in run1. Cheap win, no API cost.
-6. **Phone browsers untested** — see above. The spec wants iOS Safari and
-   Android Chrome at 360 px.
-7. **The venue USB interface has never been plugged in.** `MicSource` takes
+8. **Three phones at once, and the other mobile browser, untested.** One
+   phone works. The spec wants iOS Safari and Android Chrome at 360 px.
+9. **The venue USB interface has never been plugged in.** `MicSource` takes
    `--channel` and resamples, which is what a multi-channel interface needs,
    but every live check so far has been the laptop's built-in array.
 

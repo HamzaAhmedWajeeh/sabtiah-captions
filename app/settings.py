@@ -75,4 +75,37 @@ def save_session(session: SessionContext, path: Path | None = None) -> None:
         )
 
 
+def soniox_context(
+    glossary_path: Path | None = None, session_path: Path | None = None
+) -> dict:
+    """The Soniox `context` object from the two YAML files.
+
+    BUILD_SPEC section 6: `general` carries the title, speakers and companies
+    as key-value items, `text` the operator's free notes, and `terms` /
+    `translation_terms` come from the glossary. `speakers` is the cheapest
+    quality win available and is usually the empty list - see
+    `docs/soniox-notes.md`, "Proper nouns".
+
+    `tools/probe_soniox.py` has its own copy of this from Phase 1. It is left
+    alone deliberately: it is the tool that produced the five captures, and
+    the value of being able to re-run it unchanged is worth more than removing
+    a duplicated dict.
+    """
+    glossary = load_glossary(glossary_path)
+    session = load_session(session_path)
+    general: list[dict[str, str]] = []
+    if session.title:
+        general.append({"key": "title", "value": session.title})
+    for name in session.speakers:
+        general.append({"key": "speaker", "value": name})
+    for company in session.companies:
+        general.append({"key": "company", "value": company})
+    return {
+        "general": general,
+        "text": session.notes,
+        "terms": glossary.terms,
+        "translation_terms": glossary.translation_terms,
+    }
+
+
 settings = Settings()
