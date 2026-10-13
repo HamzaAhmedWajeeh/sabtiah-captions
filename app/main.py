@@ -5,15 +5,19 @@ One process, one event loop (BUILD_SPEC section 6). Three things live here:
 - **Routes.** `/` audience, `/screen` big screen, `/admin` operator, `/ws`
   viewers, `/healthz`, and a deliberately narrow `/static/{name}`.
 - **`CaptionSession`.** Owns a `CaptionState`, a `BroadcastHub`, and whatever
-  is currently feeding them. In Phase 3 the only feed is a replayed capture
-  (`replay.FakeSonioxClient`); Phase 4 adds the microphone and Phase 5 the
-  real Soniox client, both arriving as a different `_run_*` coroutine behind
-  the same `start`/`stop`/`status`.
+  is currently feeding them. Two feeds exist so far, and both are free:
+  `_run_replay` plays a saved capture through `CaptionState`, and `_run_audio`
+  (Phase 4) captures live audio and measures it without transcribing it.
+  Phase 5 joins the two by putting the real Soniox client between them, as a
+  third `_run_*` coroutine behind the same `start`/`stop`/`status`.
 - **Lifespan.** Starts and stops the broadcast loop.
 
-Phase 3 spends no Soniox credit, by construction: nothing in this module can
-open a network connection outward. That is CLAUDE.md's budget rule made
-structural rather than remembered.
+Phases 3 and 4 spend no Soniox credit, by construction: nothing in this
+module, and nothing in `audio_source`, can open a network connection outward.
+That is CLAUDE.md's budget rule made structural rather than remembered.
+
+Every run is appended to `logs/usage.jsonl` when it ends, free runs included,
+so the admin page can show total spend against the $10 budget.
 """
 
 from __future__ import annotations
@@ -29,16 +33,24 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 
+from app import usage
+from app.audio_source import AudioSource, FileSource, MicSource, describe_devices
 from app.broadcast import BroadcastHub
 from app.captions import CaptionState
 from app.replay import FakeSonioxClient
-from app.settings import ROOT, WEB_DIR, settings
+from app.settings import RECORDING_DIR, ROOT, WEB_DIR, settings
 
 #: Where a replayable capture may come from. A request names a capture by
 #: bare filename and it is looked up here, so no request can reach a path of
 #: its own choosing - `recordings/` and `logs/` are not servable or readable
 #: through any route (BUILD_SPEC section 8).
 CAPTURE_DIRS = (ROOT / "tests" / "fixtures", ROOT / "docs" / "captures")
+
+#: Audio a `FileSource` run may read, by bare filename only, with the same
+#: reasoning as `CAPTURE_DIRS`. Reading a recording locally is not serving it:
+#: no route returns audio, and `recordings/` stays out of `ASSETS`.
+AUDIO_SUFFIXES = (".wav", ".m4a", ".mp3", ".aac", ".flac", ".ogg", ".opus",
+                  ".webm", ".mp4", ".wma")
 
 #: Exactly what `/static` will serve, with its content type. An allowlist
 #: rather than a `StaticFiles` mount on `web/`: a mount would also serve
@@ -67,30 +79,47 @@ class CaptionSession:
         self.state = CaptionState()
         self.hub = BroadcastHub(self.state)
         self.source: str | None = None
+        self.mode = "replay"
+        self.engine = "none"
         self.paced = True
         self.started_at: float | None = None
         self.responses = 0
         self.error: str | None = None
         self._task: asyncio.Task | None = None
         self._client: FakeSonioxClient | None = None
+        self._audio: AudioSource | None = None
+        self._logged = True
 
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def start_replay(self, capture: Path, *, paced: bool = True) -> None:
-        """Drive the pipeline from a saved capture. Costs no Soniox credit."""
-        await self.stop()
+    @property
+    def level(self) -> dict[str, Any] | None:
+        """Input level, or None when nothing is capturing audio."""
+        return self._audio.level.as_dict() if self._audio is not None else None
+
+    def _begin(self, *, mode: str, engine: str, source: str) -> None:
+        """Reset everything a new run must not inherit from the last one."""
         self.state = CaptionState()
         self.hub.rebind(self.state)
-        self.source = capture.name
-        self.paced = paced
+        self.mode = mode
+        self.engine = engine
+        self.source = source
         self.started_at = time.time()
         self.responses = 0
         self.error = None
-        self._client = FakeSonioxClient(capture, paced=paced)
+        self._logged = False
         self.state.set_live(True)
         self.hub.notify()
+
+    async def start_replay(self, capture: Path, *, paced: bool = True) -> None:
+        """Drive the pipeline from a saved capture. Costs no Soniox credit."""
+        await self.stop()
+        self.paced = paced
+        self._audio = None
+        self._client = FakeSonioxClient(capture, paced=paced)
+        self._begin(mode="replay", engine="replay", source=capture.name)
         self._task = asyncio.create_task(self._run_replay(self._client),
                                          name="replay")
 
@@ -109,14 +138,71 @@ class CaptionSession:
         finally:
             # The capture ran out, or the operator stopped it. Either way the
             # session is no longer live, and the pages must say so.
-            self.state.set_live(False)
-            self.hub.notify()
+            self._finish(client.sent_ms / 1000)
+
+    async def start_audio(self, source: AudioSource) -> None:
+        """Capture live audio and measure it. **Produces no captions.**
+
+        Phase 4 has the microphone but not the engine, so this run exists to
+        answer the operator's questions - is the right input selected, is the
+        gain right, is anything clipping - and to prove the capture path end to
+        end. Phase 5 turns the same source into captions by putting the Soniox
+        client between this coroutine and `CaptionState`; nothing here changes.
+        """
+        await self.stop()
+        # Opened here so a missing or busy device raises before the session
+        # claims to be running.
+        await source.open()
+        self._client = None
+        self._audio = source
+        self.paced = getattr(source, "realtime", True)
+        self._begin(mode=source.kind, engine="monitor",
+                    source=source.describe())
+        self._task = asyncio.create_task(self._run_audio(source), name="audio")
+
+    async def _run_audio(self, source: AudioSource) -> None:
+        try:
+            async for _chunk in source:
+                # Phase 5 sends the chunk to Soniox here. Until then the audio
+                # is counted and levelled by the source itself and discarded:
+                # holding it would be a memory leak with no reader.
+                self.responses += 1
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+        finally:
+            seconds = source.audio_seconds
+            await source.close()
+            self._finish(seconds)
+
+    def _finish(self, audio_seconds: float) -> None:
+        """End of run: drop the live flag and write the usage line.
+
+        Called from the feed's `finally`, so it runs whether the source ran
+        out, failed, or was cancelled by the operator. `_logged` guards
+        against a second line when `stop()` also tidies up.
+        """
+        self.state.set_live(False)
+        self.hub.notify()
+        if self._logged:
+            return
+        self._logged = True
+        usage.record_run(
+            engine=self.engine,
+            source=self.mode,
+            audio_seconds=audio_seconds,
+            detail=self.source or "",
+        )
 
     async def stop(self) -> None:
         task, self._task = self._task, None
         if task is not None and not task.done():
             task.cancel()
             await asyncio.wait({task})
+        audio, self._audio = self._audio, None
+        if audio is not None:
+            await audio.close()
         self.state.set_live(False)
         self.hub.notify()
 
@@ -127,8 +213,11 @@ class CaptionSession:
     def status(self) -> dict[str, Any]:
         """Everything `/admin` shows. No API key, no caption text."""
         client = self._client
-        return {
+        audio = self._audio
+        status: dict[str, Any] = {
             "running": self.running,
+            "mode": self.mode,
+            "engine": self.engine,
             "source": self.source,
             "paced": self.paced,
             "responses": self.responses,
@@ -140,8 +229,21 @@ class CaptionSession:
             "audio_ms": client.sent_ms if client else 0,
             "audio_total_s": round(client.audio_seconds, 1) if client else 0,
             "captures": available_captures(),
+            "audio_files": available_audio(),
+            "usage": usage.totals().as_dict(),
             **self.hub.status(),
         }
+        if audio is not None:
+            # A live source overrides `audio_ms`: for mic and file runs it is
+            # audio actually captured, not a position in a recording. Only a
+            # file knows its length, so `audio_total_s` stays absent for a mic.
+            source_status = audio.status()
+            total_ms = source_status.get("total_ms")
+            status.update(source_status)
+            status["audio_total_s"] = (
+                round(total_ms / 1000, 1) if total_ms else 0
+            )
+        return status
 
 
 session = CaptionSession()
@@ -172,6 +274,37 @@ def available_captures() -> list[str]:
     """Replayable capture filenames, deduplicated, in a stable order."""
     names = {p.name for d in CAPTURE_DIRS if d.is_dir() for p in d.glob("*.jsonl")}
     return sorted(names)
+
+
+def available_audio() -> list[str]:
+    """Recordings a `FileSource` run may be pointed at, newest first.
+
+    Ordered by modification time because the useful one is almost always the
+    clip just recorded, and `recordings/` accumulates.
+    """
+    if not RECORDING_DIR.is_dir():
+        return []
+    files = [
+        p for p in RECORDING_DIR.iterdir()
+        if p.is_file() and p.suffix.lower() in AUDIO_SUFFIXES
+    ]
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return [p.name for p in files]
+
+
+def resolve_audio(name: str) -> Path:
+    """Look an audio file up inside `recordings/`, by filename only.
+
+    Same containment as `resolve_capture`: only the final path component is
+    used, so no request can name a file elsewhere on the laptop.
+    """
+    wanted = Path(name or "").name
+    if Path(wanted).suffix.lower() not in AUDIO_SUFFIXES:
+        raise HTTPException(status_code=400, detail="not an audio file")
+    candidate = RECORDING_DIR / wanted
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="no such recording")
+    return candidate
 
 
 def resolve_capture(name: str) -> Path:
@@ -257,16 +390,85 @@ async def admin_status(token: str | None = Query(default=None)) -> JSONResponse:
     return JSONResponse(session.status(), headers=NO_STORE)
 
 
+@app.get("/admin/level")
+async def admin_level(token: str | None = Query(default=None)) -> JSONResponse:
+    """Just the input level.
+
+    The meter wants several updates a second - a level that moves once a
+    second cannot show a syllable - and `/admin/status` is too expensive to
+    ask that often: it stats the capture directories and re-reads the usage
+    ledger. This returns two numbers and touches no disk.
+    """
+    require_admin(token)
+    return JSONResponse(
+        {"running": session.running, "level": session.level},
+        headers=NO_STORE,
+    )
+
+
+@app.get("/admin/devices")
+async def admin_devices(token: str | None = Query(default=None)) -> JSONResponse:
+    """Input devices for the operator's dropdown.
+
+    Its own endpoint rather than part of `/admin/status`: querying PortAudio
+    takes tens of milliseconds and the device list does not change between
+    polls, so doing it once a second would be a waste that grows with every
+    page left open.
+    """
+    require_admin(token)
+    return JSONResponse({"devices": describe_devices()}, headers=NO_STORE)
+
+
 @app.post("/admin/start")
 async def admin_start(
     token: str | None = Query(default=None),
-    capture: str = Query(...),
-    paced: bool = Query(default=True),
+    # Plain defaults rather than `Query(default=...)`: `tests/test_server.py`
+    # calls these handlers as the coroutines they are, and an unresolved
+    # `Query` object would arrive as the argument's value. FastAPI treats a
+    # scalar with a plain default as a query parameter either way.
+    source: str = "replay",
+    capture: str | None = None,
+    file: str | None = None,
+    device: int | None = None,
+    channel: int = 1,
+    record: bool = False,
+    paced: bool = True,
 ) -> JSONResponse:
-    """Start a replay session. Phase 4 adds `source=mic` here."""
+    """Start a session.
+
+    `source=replay` plays a saved capture through `CaptionState` - captions,
+    no audio. `source=mic` and `source=file` capture audio and measure it -
+    audio, no captions, because the engine arrives in Phase 5. Neither one
+    can spend Soniox credit.
+    """
     require_admin(token)
-    path = resolve_capture(capture)
-    await session.start_replay(path, paced=paced)
+    if source == "replay":
+        if not capture:
+            raise HTTPException(status_code=400, detail="capture required")
+        await session.start_replay(resolve_capture(capture), paced=paced)
+    elif source == "mic":
+        try:
+            await session.start_audio(
+                MicSource(device, channel=channel, record=record)
+            )
+        except Exception as exc:
+            # A device that cannot be opened is the operator's problem to
+            # fix, not a server fault: say which device and why, and leave
+            # the session stopped rather than half-started.
+            raise HTTPException(
+                status_code=400,
+                detail=f"could not open device {device}: {exc}",
+            ) from exc
+    elif source == "file":
+        if not file:
+            raise HTTPException(status_code=400, detail="file required")
+        await session.start_audio(
+            FileSource(resolve_audio(file), realtime=paced,
+                       channel=channel, record=record)
+        )
+    else:
+        raise HTTPException(status_code=400, detail="source must be "
+                                                   "replay, mic or file")
     return JSONResponse(session.status(), headers=NO_STORE)
 
 

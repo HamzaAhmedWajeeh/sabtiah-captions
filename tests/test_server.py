@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app import main as server  # noqa: E402
+from app import usage  # noqa: E402
 from app.main import (  # noqa: E402
     ASSETS,
     CaptionSession,
@@ -84,6 +85,18 @@ class FakeWebSocket:
 
     async def close(self, code: int = 1000) -> None:
         self.closed = code
+
+
+@pytest.fixture(autouse=True)
+def quarantine_usage_log(tmp_path, monkeypatch):
+    """Point the spend ledger at a tmp directory for every test here.
+
+    Phase 4 made every run append to `logs/usage.jsonl`, which means a test
+    suite that starts a few dozen replays writes a few dozen lines into the
+    operator's real ledger. The ledger is the only record of what the $10 was
+    spent on; a run nobody performed must never appear on it.
+    """
+    monkeypatch.setattr(usage, "LOG_DIR", tmp_path / "logs")
 
 
 @pytest.fixture(autouse=True)

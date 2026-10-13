@@ -11,17 +11,21 @@
 <!-- Never linked from the audience page (BUILD_SPEC section 8). Reached only
      with the operator token in the query string; every endpoint below
      re-checks it, so this page carries no authority of its own.
-     Phase 3 scope: start and stop a replayed capture, and watch the hub.
-     Phase 6 adds the input device, session context, and the log/record and
-     translation-direction toggles. -->
+     Phase 3: start and stop a replayed capture, and watch the hub.
+     Phase 4: pick an input, watch the level, and see API spend.
+     Phase 6 adds session context and the log/translation-direction toggles. -->
 <body class="admin" data-page="admin">
   <h1>Sabtiah Live Captions — operator</h1>
 
   <fieldset>
-    <legend>Session (replay)</legend>
+    <legend>Session</legend>
     <div class="row">
-      <label>Capture
-        <select id="capture"></select>
+      <label>Source
+        <select id="source">
+          <option value="replay">Replay a capture — captions</option>
+          <option value="mic">Microphone — audio only</option>
+          <option value="file">Recording — audio only</option>
+        </select>
       </label>
       <label>
         <input type="checkbox" id="paced" checked>
@@ -30,8 +34,56 @@
       <button type="button" id="start" class="primary">Start</button>
       <button type="button" id="stop">Stop</button>
     </div>
-    <p class="note" id="hint">
-      Replay costs no API credit. Live audio arrives in Phase 4.
+
+    <div class="row" data-for="replay">
+      <label>Capture
+        <select id="capture"></select>
+      </label>
+    </div>
+
+    <div class="row" data-for="mic">
+      <label>Device
+        <select id="device"></select>
+      </label>
+      <label>Channel
+        <input type="number" id="channel" value="1" min="1" max="16">
+      </label>
+      <button type="button" id="refresh-devices">Refresh</button>
+    </div>
+
+    <div class="row" data-for="file">
+      <label>Recording
+        <select id="file"></select>
+      </label>
+    </div>
+
+    <div class="row" data-for="mic file">
+      <label>
+        <input type="checkbox" id="record">
+        Record this run to <code>recordings/</code>
+      </label>
+    </div>
+
+    <p class="note" id="hint"></p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Input level</legend>
+    <!-- aria-hidden: the numbers beside the bar carry the same information,
+         and a bar repainted ten times a second is noise to a screen reader. -->
+    <div class="meter" id="meter" aria-hidden="true">
+      <div class="meter-fill" id="meter-fill"></div>
+      <div class="meter-mark" style="left: 66.7%"></div>
+      <div class="meter-mark" style="left: 83.3%"></div>
+    </div>
+    <p class="note">
+      <span id="s-level">—</span>
+      <span id="s-clip" class="clip">CLIPPING</span>
+    </p>
+    <p class="note">
+      Speech should sit in the middle of the bar and touch the first mark on
+      peaks. If <b>CLIPPING</b> lights, turn the mixer down — no later stage
+      can undo it.
     </p>
   </fieldset>
 
@@ -42,14 +94,34 @@
         <tr><th>Session</th><td id="s-running">—</td></tr>
         <tr><th>Source</th><td id="s-source">—</td></tr>
         <tr><th>Elapsed</th><td id="s-elapsed">—</td></tr>
-        <tr><th>Audio position</th><td id="s-audio">—</td></tr>
+        <tr><th>Audio</th><td id="s-audio">—</td></tr>
         <tr><th>Responses</th><td id="s-responses">—</td></tr>
         <tr><th>Sequence</th><td id="s-seq">—</td></tr>
         <tr><th>Viewers</th><td id="s-viewers">—</td></tr>
         <tr><th>Refused / dropped</th><td id="s-shed">—</td></tr>
+        <tr><th>Audio dropped</th><td id="s-audio-dropped">—</td></tr>
+        <tr><th>Recording</th><td id="s-recording">—</td></tr>
         <tr><th>Last error</th><td id="s-error">—</td></tr>
       </tbody>
     </table>
+  </fieldset>
+
+  <fieldset>
+    <legend>API spend</legend>
+    <table>
+      <tbody>
+        <tr><th>Streamed to the engine</th><td id="s-spend">—</td></tr>
+        <tr><th>Free runs (replay, mic)</th><td id="s-free">—</td></tr>
+        <tr><th>Runs logged</th><td id="s-runs">—</td></tr>
+      </tbody>
+    </table>
+    <p class="note">
+      From <code>logs/usage.jsonl</code>. Replay and microphone runs stream
+      nothing and cost nothing; only Phase 5's live client will add to the
+      first line. The word for the engine is kept off this page on purpose:
+      a test greps every served file for it, and a blunt check is one that
+      cannot be argued with the night before a talk.
+    </p>
   </fieldset>
 
   <script src="/static/admin.js"></script>

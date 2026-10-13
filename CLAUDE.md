@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-**Phases 0–3 are done. Phase 4 (live audio capture) is next.**
+**Phases 0–4 are done. Phase 5 (resilience, the real Soniox client) is next.**
 
 - **Phase 1 is answered**, with five captures in `docs/captures/` and the findings in `docs/soniox-notes.md`. Read that file before touching caption logic — several of its measurements contradict assumptions in BUILD_SPEC section 3 and section 6.
 - **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. It paces a capture at real time, so the pages can be judged at true speed.
-- **Phase 3** is `app/broadcast.py` (viewer hub), `app/main.py` (routes, `/ws`, the replay session) and the three pages in `web/`. **145 tests, all offline.** Build Phase 4 and 5 against `FakeSonioxClient` too: `CaptionSession._run_replay` is the only place that knows where responses come from, so the mic and the real client are siblings of it.
+- **Phase 3** is `app/broadcast.py` (viewer hub), `app/main.py` (routes, `/ws`, the replay session) and the three pages in `web/`.
+- **Phase 4** is `app/audio_source.py` (`MicSource`, `FileSource`), `tools/list_devices.py`, the admin level meter and `app/usage.py` (the `logs/usage.jsonl` spend ledger). **206 tests, all offline.** Build Phase 5 against `FakeSonioxClient` too. There are now two feeds in `app/main.py` and the real client is a sibling of both: `_run_replay` knows where responses come from, `_run_audio` knows where audio comes from, and Phase 5 is the piece between them.
 - **`docs/CHECKPOINT.md` is the short version**: what is done, what is next, the open items, and Soniox audio spent (**22.0 minutes** of the $10 budget so far).
 - Two findings matter most for the phases ahead. **Endpoint detection can effectively never fire** — `run4-saudi` gave one `<end>` in 300 s — so `<end>` is not a reliable paragraph break and `captions.py` adds a soft size break. And **nothing stays in Latin script in Arabic captions**: `RAG`/`MCP`/`LLM` get transliterated in the `en`→`ar` direction. The `translation_terms` fix in `config/glossary.yaml` is untested and is the highest-value remaining experiment.
 
@@ -119,6 +120,8 @@ treat the API as the scarce resource it is.
 - `/admin` requires `ADMIN_TOKEN` with a constant-time compare, and is never linked from the audience page. Audience endpoints are read-only.
 - `logs/`, `recordings/`, `clips/` are gitignored and never served over HTTP. Logging and recording are both off by default — privacy consent matters; captions without logging is always allowed.
 
-## Hard deadline
+## Deadlines
 
-Live demo at the Sabtiah meetup on Saturday Oct 17, 2026. Spec section 10 has the day-by-day plan. Friday Oct 16 is fixes only, no new features.
+**Changed on 2026-10-13.** Saturday Oct 17, 2026 is now a **conversation with the Sabtiah organizer**, not a live demo: what it needs is a working demo on Hamza's phone, shown to one person. **The first real session is about a week later, roughly Sat Oct 24.**
+
+Spec section 10's day-by-day plan was written for the old date and is no longer the schedule. Everything else in BUILD_SPEC still holds.

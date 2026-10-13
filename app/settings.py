@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     admin_token: str = ""
     public_url: str = "http://localhost:8000"
 
+    #: Soniox credit, in dollars, that the whole project has to live inside
+    #: (CLAUDE.md). Shown on `/admin` beside what has been spent.
+    soniox_budget_usd: float = 10.0
+    #: Dollars per streamed minute. Left at 0 because this repo has never
+    #: recorded the real figure, and `app.usage` would rather show counted
+    #: minutes than an invented dollar amount. Set it in `.env` to turn the
+    #: dollar estimate on.
+    soniox_rate_per_minute: float = 0.0
+
 
 class Glossary(BaseModel):
     terms: list[str] = Field(default_factory=list)
