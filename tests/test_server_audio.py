@@ -363,11 +363,36 @@ async def test_status_carries_the_ledger_and_no_engine_name(
 
 
 async def test_no_dollar_figure_is_shown_without_a_configured_rate(
-    fresh_session, quarantine_usage_log
+    fresh_session, quarantine_usage_log, monkeypatch
 ):
+    """The rate is pinned here rather than read from the machine.
+
+    This test used to rely on the operator's `.env` not having one, so it
+    passed until the day a rate was actually configured and then failed on
+    that laptop only. A test whose result depends on whose machine it runs on
+    is not testing the code.
+    """
+    monkeypatch.setattr(settings, "soniox_rate_per_minute", 0.0)
     body = json.loads((await admin_status(token=TOKEN)).body)
     assert body["usage"]["estimated_usd"] is None
     assert body["usage"]["rate_per_minute"] is None
+
+
+async def test_dollars_are_shown_once_a_rate_is_configured(
+    fresh_session, quarantine_usage_log, monkeypatch
+):
+    """The other half, which nothing covered: with a rate set, /admin shows
+    money and what is left of the budget."""
+    monkeypatch.setattr(settings, "soniox_rate_per_minute", 0.003)
+    monkeypatch.setattr(settings, "soniox_budget_usd", 10.0)
+    usage.record_run(engine="soniox", source="mic", audio_seconds=600.0,
+                     log_dir=quarantine_usage_log)
+
+    body = json.loads((await admin_status(token=TOKEN)).body)["usage"]
+    assert body["billable_minutes"] == 10.0
+    assert body["estimated_usd"] == 0.03
+    assert body["budget_remaining_usd"] == 9.97
+    assert body["rate_per_minute"] == 0.003
 
 
 # ---------------------------------------------------------------------------

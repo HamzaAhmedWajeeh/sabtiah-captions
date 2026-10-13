@@ -10,33 +10,73 @@ so Phase 5 resilience and the Phase 8 tunnel have a week more than they had
 this morning — and the thing to protect now is a phone that shows captions
 convincingly over Wi-Fi, which it does today off a replay.
 
-**Two live runs happened, and they settled the biggest open question.**
+**Four live runs happened, and they settled the biggest open question.**
 
 - **run6** (1.36 min): the pipeline works end to end — headset, real Wi-Fi,
   captions on the phone in both languages, no errors.
 - **run7** (2.88 min): **`translation_terms` works.** `RAG`, `embeddings`,
   `LLM`, `MCP`, `fine-tuning` and `transformers` all stayed in English in the
-  Arabic captions. That question had been open since 2026-10-11 and is now
-  answered in `docs/soniox-notes.md`.
-
-run7 also broke, usefully: a deliberate 10 s Wi-Fi drop became a **32.5 s
-outage** and lost ~12.5 s of speech.
-
-- **run9** (3.51 min) found the one bug the laptop could not see: on an
-  internet drop the **phone froze and never recovered**, while the laptop
-  page handled it fine. A dead socket looks exactly like a quiet one, so
-  nothing ever timed out. Fixed with a 5 s server heartbeat and a 12 s
-  client watchdog, plus reconnects on `online` and on waking. It also
-  cut the last words at Stop. Both fixed; write-up in `docs/live/run9.md`.
-- **run8** (1.73 min) confirmed the fixes on the phone: `[connection
+  Arabic captions. That question had been open since 2026-10-11 and is
+  answered in `docs/soniox-notes.md`. The same run broke, usefully: a
+  deliberate 10 s Wi-Fi drop became a **32.5 s outage** and lost ~12.5 s of
+  speech.
+- **run8** (1.73 min) confirmed the run7 fixes on the phone: `[connection
   interrupted]` in both streams, captions back **live** with no lag, no glued
-  words, and the stale error cleared. BUILD_SPEC acceptance 1 and 2 now pass
-  live. It also produced the project's first raw token-level log.
+  words, the stale error cleared. BUILD_SPEC acceptance 1 and 2 pass live. It
+  produced the project's first raw token-level log.
+- **run9** (3.51 min) found the one bug the laptop could not see: on an
+  internet drop the **phone froze and never recovered**, while the laptop page
+  handled it fine. A dead socket looks exactly like a quiet one, so nothing
+  ever timed out. Fixed with a 5 s server heartbeat and a 12 s client
+  watchdog, plus reconnects on `online` and on waking. It also cut the last
+  words at Stop. Both fixed; write-up in `docs/live/run9.md`.
 
-**Live testing is paused for the week.** Phases 0–5 done, and Phase 6's
-session context landed early because the details turned out to be **private
-and runtime-editable** — see below. The rest of Phase 6 (logging toggles,
-translation direction, clear captions) is next.
+## Next
+
+In this order. The first two cost nothing.
+
+**a. Restart the server so it runs the latest code.** The reconnect fix and
+the clean stop both landed after the last server was started, so nothing
+running today had them. Start it the usual way and check the build, not just
+that it answers:
+
+```powershell
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+**b. Free replay test of the phone reconnect.** Start a replay, open the
+audience page on the phone, turn the **phone's** Wi-Fi off for 20 s, then back
+on. Expected: the page shows `reconnecting`, and within about 12 s of the
+radio returning it is live again and caught up to the current captions — not
+resumed where it froze. This is the run9 failure, and it costs nothing to
+check because a replay needs no API at all.
+
+**c. About 3 minutes live, with real Saudi audio.** Two things in one run:
+
+- **Saudi dialect**, which is still unmeasured after four runs. Every Arabic
+  clip so far has been Levantine. The audience is Saudi; this is the oldest
+  open item that is purely about finding the right 30 seconds of audio.
+- **Apply now**, never exercised live. Mid-run: add a speaker name in
+  **This talk**, press Save, then **Apply now**. Expected: captions continue
+  in the same place, **no `[connection interrupted]` notice**, and the next
+  mention of that name comes out spelled right.
+
+Tick **"Keep a log of this run"** so there is a token-level record.
+
+**d. Phase 8 — the tunnel and the QR code.** The last piece before an
+audience can reach the captions without being on the laptop's network.
+
+**Undecided, and it needs a decision before Saturday Oct 17:** a Cloudflare
+named tunnel on an owned domain, or a free quick tunnel. The quick tunnel
+needs no domain and no account setup, but its hostname changes every restart,
+which means the QR code has to be regenerated each time and cannot be printed
+in advance. For a conversation with one person on Oct 17 that is probably
+fine; for the real session a week later it probably is not.
+
+Phases 0–5 are done, and Phase 6's session context landed early because the
+details turned out to be **private and runtime-editable** — see below. The
+rest of Phase 6 (logging toggles, translation direction, clear captions) is
+still open, but the ordered list under **Next** comes first.
 
 ## Done
 
@@ -86,7 +126,7 @@ constraint; it never was. The rules in CLAUDE.md are updated:
 
 Set `SONIOX_RATE_PER_MINUTE=0.003` in `.env` and `/admin` shows dollars.
 
-## The two live runs
+## The live runs in detail
 
 **run6** — `Microsoft Sound Mapper` (device 0) at native 16 kHz, 221
 responses, no errors, no reconnects. Confirmed the whole path works. Its
