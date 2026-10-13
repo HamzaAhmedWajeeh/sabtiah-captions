@@ -102,7 +102,7 @@ Then:
 
 **This spends money.** Everything else in this project is free.
 
-1. Open `/admin?token=...`.
+1. Open `/admin?token=<ADMIN_TOKEN>` — the value from your `.env`.
 2. Set **Source** to *Microphone — audio only* and pick your input device.
    Watch the **level meter** while someone talks: it should sit in the middle
    of the bar and touch the first mark on peaks. If **CLIPPING** lights, turn
@@ -204,8 +204,12 @@ the phone's browser.
 PATH is read when the terminal starts.
 
 **`/admin` returns 401.** The token in the URL does not match `ADMIN_TOKEN` in
-`.env`, or the server was started before `.env` was edited — restart it. An
-unset `ADMIN_TOKEN` denies everything rather than allowing it.
+`.env`, or the server was started before `.env` was edited — restart it.
+
+**The server refuses to start: "ADMIN_TOKEN is not set".** Put one in `.env`
+in the repository root. That file is read from the root whatever directory
+you start from, and it is the only place the token belongs — do not pass one
+on the command line.
 
 **The server will not start: "only one usage of each socket address".**
 Something is already on port 8000, usually an older copy of this server:

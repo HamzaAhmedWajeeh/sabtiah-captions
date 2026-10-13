@@ -26,6 +26,7 @@ from fastapi import HTTPException
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import app.settings  # noqa: E402
 from app import main as server  # noqa: E402
 from app import usage  # noqa: E402
 from app.main import (  # noqa: E402
@@ -445,3 +446,111 @@ async def test_a_viewer_is_removed_when_its_page_closes(fresh_session):
     await viewer_socket(socket)
 
     assert fresh_session.hub.viewer_count == 0
+
+
+# ---------------------------------------------------------------------------
+# The admin token comes from .env, and only from .env
+# ---------------------------------------------------------------------------
+#
+# Rule set on 2026-10-13: never start the server with a token passed on the
+# command line. A throwaway value in an env var is convenient and leaves the
+# real token untested, so a session can look fine all afternoon and then fail
+# when it is started the normal way.
+
+
+def test_the_env_file_is_read_from_the_repo_root_not_the_cwd():
+    """`uvicorn` is often started from somewhere else, and a token that
+    silently fails to load is the failure this whole rule exists to avoid."""
+    from app.settings import ROOT as settings_root
+    from app.settings import Settings
+
+    configured = Settings.model_config["env_file"]
+    assert Path(configured).is_absolute(), (
+        f"the env file is resolved relatively ({configured}); the token would "
+        f"depend on which directory the server was started from"
+    )
+    assert Path(configured) == settings_root / ".env"
+    # ...and the root is derived from this module's own location, so it does
+    # not move when the process does.
+    assert settings_root == Path(app.settings.__file__).resolve().parent.parent
+
+
+def test_the_server_refuses_to_start_without_a_token(monkeypatch):
+    """Not "starts and denies everything" - that looks like a working server.
+
+    `require_admin` already refuses every request when the token is unset,
+    which is right at request time and useless at a venue: the audience page
+    serves, the captions never start, and nothing says why.
+    """
+    from app.main import require_admin_token_configured
+
+    monkeypatch.setattr(settings, "admin_token", "")
+    with pytest.raises(RuntimeError) as raised:
+        require_admin_token_configured()
+    message = str(raised.value)
+    assert "ADMIN_TOKEN is not set" in message
+    assert ".env" in message
+
+
+def test_whitespace_is_not_a_token(monkeypatch):
+    from app.main import require_admin_token_configured
+
+    monkeypatch.setattr(settings, "admin_token", "   \n")
+    with pytest.raises(RuntimeError):
+        require_admin_token_configured()
+
+
+def test_a_configured_token_starts_normally(monkeypatch):
+    from app.main import require_admin_token_configured
+
+    monkeypatch.setattr(settings, "admin_token", "any-real-token")
+    require_admin_token_configured()  # must not raise
+
+
+def test_the_refusal_message_never_contains_a_token(monkeypatch):
+    """The message is printed to a terminal and often pasted into chat."""
+    from app.main import NO_TOKEN_MESSAGE, require_admin_token_configured
+
+    monkeypatch.setattr(settings, "admin_token", "")
+    with pytest.raises(RuntimeError) as raised:
+        require_admin_token_configured()
+    assert settings_real_token() not in str(raised.value)
+    assert settings_real_token() not in NO_TOKEN_MESSAGE
+
+
+def settings_real_token() -> str:
+    """The operator's actual token, read once so tests can prove it never
+    appears anywhere. Never printed, never asserted *equal* to anything."""
+    from app.settings import Settings
+
+    return Settings().admin_token or "\x00-no-token-configured-\x00"
+
+
+def test_no_committed_file_contains_the_operator_token():
+    """The real token must not have leaked into a doc, a script or a test
+    while someone was writing an example."""
+    token = settings_real_token()
+    if token.startswith("\x00"):
+        pytest.skip("no ADMIN_TOKEN configured on this machine")
+    for path in ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        parts = set(path.parts)
+        if parts & {".git", ".venv", "__pycache__", ".pytest_cache", "logs",
+                    "recordings", "clips"}:
+            continue
+        if path.name == ".env":
+            continue  # the one place it belongs
+        try:
+            blob = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        assert token not in blob, f"the admin token appears in {path.name}"
+
+
+def test_tests_use_their_own_token_not_the_operators():
+    """Every test token in this suite is an obvious fake."""
+    token = settings_real_token()
+    for path in (ROOT / "tests").glob("test_*.py"):
+        blob = path.read_text(encoding="utf-8")
+        assert token not in blob, f"{path.name} uses the operator's token"

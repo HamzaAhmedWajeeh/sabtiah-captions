@@ -289,9 +289,11 @@ event that cannot happen on this project.
 Server bound to all interfaces, replaying `run1` at real time:
 
 ```powershell
-$env:ADMIN_TOKEN = "<throwaway>"
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+The token comes from `.env` in the repository root and nowhere else - see
+the rule in CLAUDE.md. The server refuses to start without one.
 
 - **Phone URL: `http://172.16.10.137:8000/`** — the laptop's address on the
   `EMP 2` Wi-Fi. It is DHCP, so **check it again before the meeting**:
@@ -318,7 +320,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `run1` is five minutes long and then stops. Restart it from `/admin`, or:
 
   ```powershell
-  curl -X POST "http://127.0.0.1:8000/admin/start?token=<token>&capture=run1.jsonl&paced=true"
+  curl -X POST "http://127.0.0.1:8000/admin/start?token=<ADMIN_TOKEN>&capture=run1.jsonl&paced=true"
   ```
 
 **Verified on Hamza's phone on 2026-10-13**: the page loaded over the office

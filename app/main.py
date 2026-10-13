@@ -455,8 +455,44 @@ class CaptionSession:
 session = CaptionSession()
 
 
+#: What to say when there is no admin token, written out here because it is
+#: the first thing an operator sees when the server will not come up.
+NO_TOKEN_MESSAGE = (
+    "ADMIN_TOKEN is not set, so refusing to start.\n"
+    "\n"
+    "  The operator page would be unreachable and the session unstartable,\n"
+    "  which is a worse failure at a venue than this one: it looks like the\n"
+    "  server is working.\n"
+    "\n"
+    "  Put a long random value in {env}:\n"
+    "\n"
+    "      ADMIN_TOKEN=...\n"
+    "\n"
+    "  Generate one with:  [Guid]::NewGuid().ToString('N')   (PowerShell)\n"
+    "                      openssl rand -hex 16              (macOS)\n"
+    "\n"
+    "  That file is read from the repository root whatever directory the\n"
+    "  server is started from, and it is the only place the token belongs -\n"
+    "  do not pass one on the command line."
+)
+
+
+def require_admin_token_configured() -> None:
+    """Refuse to start without an admin token.
+
+    `require_admin` already denies every request when the token is unset,
+    which is the right call at request time but makes for a confusing venue:
+    the pages serve, the audience sees "not live", and `/admin` returns 401
+    no matter what is typed. Failing at startup says why, once, in the
+    terminal the operator is already looking at.
+    """
+    if not settings.admin_token.strip():
+        raise RuntimeError(NO_TOKEN_MESSAGE.format(env=ROOT / ".env"))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    require_admin_token_configured()
     session.hub.start()
     try:
         yield
