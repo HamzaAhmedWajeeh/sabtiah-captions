@@ -178,6 +178,19 @@ main.both { grid-template-rows: 1fr 1fr; }
   font-style: normal;
 }
 
+/* A gap the audience should know about: audio that was captured during a
+   reconnect and deliberately never sent, because catching up would leave the
+   captions permanently late. Muted and italic so it reads as an aside and is
+   never mistaken for something the speaker said. */
+#stream-en .notice,
+#stream-ar .notice,
+#screen-stream .notice {
+  color: var(--dim);
+  font-style: italic;
+  font-size: 0.8em;
+  opacity: 0.75;
+}
+
 /* -- jump to live ------------------------------------------------------- */
 
 #jump {

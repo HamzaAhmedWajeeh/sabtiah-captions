@@ -1033,14 +1033,59 @@ the model does not appear to have recognised the AI sense of the word at all.
 - **`AI` was removed from `translation_terms`.** `الذكاء الاصطناعي` is the
   natural Arabic and reads more easily than the acronym; it stays in `terms`
   so it is still recognised.
-- **`agents` is still in, and is the one term to watch** on the next run. If
-  it fails again, the honest options are to accept it or to map it to a chosen
-  Arabic word (`وكلاء`) rather than leaving the model to pick `أجهزة`.
+- **`agents` is a known limitation, accepted for now** (Hamza, 2026-10-13).
+  It stays in `translation_terms` and is expected to keep failing. The next
+  run tests the *singular* `agent`, which has never been spoken, to see
+  whether the form matters. If that fails too, the honest options are to live
+  with `أجهزة` or to map `agents` to a chosen Arabic word (`وكلاء`) rather than
+  leaving the model to pick "devices".
 - **A term must be in `terms` as well.** `transformers` was in neither list on
   run6. A word the recogniser does not expect cannot be preserved by the
   translator.
 
 Transcripts: `docs/live/run6-first-live.json`, `docs/live/run7-live.json`.
+
+
+## One Arabic phrase appeared in the English stream (run7)
+
+`en` paragraph 15 of run7 reads:
+
+> Uh, **التوسع في الحديث** Uh, expanding the discussion.
+
+The Arabic is followed immediately by its English translation, in the English
+stream, which is the only such case in the run.
+
+**It is almost certainly Soniox's labelling, not a routing bug**, and the
+reasoning is worth writing down because the alternative is a bug in
+`captions.py`:
+
+- `CaptionState` never moves text between streams. `_route` returns
+  `token["language"]` when it names a known stream, and for a translation with
+  no `language` it uses "the one that isn't `source_language`". There is no
+  path that puts text into `en` unless Soniox labelled it `en` - or unless the
+  fallback below fires.
+- The fallback: an **original** token with no usable `language` is routed to
+  `_last_original_language`. Hamza had been speaking English, so if Soniox
+  emitted that Arabic phrase with no `language` field, it would land in `en`.
+- Across all four Phase 1 captures - about 6,800 tokens - there are **zero**
+  original tokens with no `language`, and **zero** `en`-tagged tokens
+  containing Arabic script. So the fallback has never fired on real data, and
+  Soniox has never previously mislabelled script.
+
+What distinguishes run7 is that it is the first capture with a **live
+mid-sentence language switch**: Hamza said an Arabic phrase inside English
+speech and then translated himself aloud. A language-identification wobble at
+that boundary is the likeliest explanation.
+
+**This cannot be settled from the data we have**, because a live run keeps no
+token-level record - only the assembled paragraphs. `/admin/start?source=live`
+now takes `capture=true`, which writes the raw responses to
+`logs/live-<date>.jsonl` exactly as `probe_soniox.py` does. **Turn it on for
+the next run** and the question becomes a one-line grep.
+
+The consequence either way is small: one phrase in the wrong column, and the
+reader still sees its English translation beside it. It does not affect the
+Arabic stream, which stayed clean.
 
 ## Verified without Soniox
 

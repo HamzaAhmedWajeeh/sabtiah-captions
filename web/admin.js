@@ -31,6 +31,7 @@
     channel: document.getElementById('channel'),
     refreshDevices: document.getElementById('refresh-devices'),
     record: document.getElementById('record'),
+    logResponses: document.getElementById('log-responses'),
     arm: document.getElementById('arm'),
     paced: document.getElementById('paced'),
     start: document.getElementById('start'),
@@ -49,9 +50,11 @@
     shed: document.getElementById('s-shed'),
     audioDropped: document.getElementById('s-audio-dropped'),
     recording: document.getElementById('s-recording'),
+    capture: document.getElementById('s-capture'),
     engine: document.getElementById('s-engine'),
     lag: document.getElementById('s-lag'),
     retries: document.getElementById('s-retries'),
+    lost: document.getElementById('s-lost'),
     silence: document.getElementById('s-silence'),
     thisRun: document.getElementById('s-this-run'),
     error: document.getElementById('s-error'),
@@ -169,6 +172,7 @@
     els.audioDropped.textContent = status.dropped_chunks === undefined
       ? '—' : status.dropped_chunks + ' chunk(s)';
     els.recording.textContent = status.recording || 'off';
+    els.capture.textContent = status.capture || 'off';
     els.engine.textContent = status.engine_state || '—';
     els.engine.className = status.engine_state === 'reconnecting'
       ? 'error' : '';
@@ -176,6 +180,9 @@
       ? '—' : status.lag_seconds.toFixed(2) + ' s';
     els.retries.textContent = status.reconnects === undefined
       ? '—' : status.reconnects + ' / ' + status.rollovers;
+    els.lost.textContent = status.dropped_seconds === undefined
+      ? '—' : status.dropped_seconds.toFixed(1) + ' s';
+    els.lost.className = status.dropped_seconds ? 'error' : '';
     els.silence.textContent = status.silent_seconds === undefined
       ? '—' : status.silent_seconds.toFixed(0) + ' s';
     els.thisRun.textContent = status.streamed_seconds === undefined
@@ -258,7 +265,8 @@
     var params = {
       source: current,
       paced: els.paced.checked ? 'true' : 'false',
-      record: els.record.checked ? 'true' : 'false'
+      record: els.record.checked ? 'true' : 'false',
+      log_responses: els.logResponses.checked ? 'true' : 'false'
     };
     if (current === 'replay') {
       if (!els.capture.value) { return; }

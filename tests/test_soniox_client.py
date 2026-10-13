@@ -767,12 +767,15 @@ async def paced_numbered(count: int, client_box: dict):
     await asyncio.sleep(0.2)
 
 
-async def run_outage(ring_seconds: float, outage_chunks: int,
-                     total: int = 60) -> tuple[FakeServer, SonioxClient]:
+async def run_outage(outage_chunks: int, *, replay_seconds: float = 10.0,
+                     total: int = 60,
+                     on_audio_dropped=None) -> tuple[FakeServer, SonioxClient]:
     server = OutageOfLength(after=10, outage_chunks=outage_chunks)
     box: dict = {}
     client = SonioxClient(paced_numbered(total, box), api_key=KEY,
-                          connect=server, ring_seconds=ring_seconds)
+                          connect=server, ring_seconds=30.0,
+                          max_replay_seconds=replay_seconds,
+                          on_audio_dropped=on_audio_dropped)
     server.client = client
 
     got = []
@@ -794,42 +797,71 @@ async def run_outage(ring_seconds: float, outage_chunks: int,
     return server, client
 
 
-async def test_an_outage_longer_than_the_ring_loses_speech():
-    """The run7 bug, reproduced: a 20 s ring against a 32.5 s outage.
+async def test_an_outage_longer_than_the_replay_window_drops_the_oldest():
+    """The run7 bug, and the deliberate behaviour that replaced it.
 
-    Scaled down - a 1 s ring against a 2.5 s outage - but it is the same
-    arithmetic, and it is the arithmetic that lost "the same architecture
-    behind ChatGPT".
+    run7 lost audio because the ring could not hold the outage. The decision
+    of 2026-10-13 is that a long outage *should* lose its oldest audio rather
+    than leave the captions permanently late - so this is no longer a bug, it
+    is policy, and what matters is that the loss is bounded and reported.
     """
-    server, client = await run_outage(ring_seconds=1.0, outage_chunks=25)
+    server, client = await run_outage(outage_chunks=25, replay_seconds=0.5)
 
     assert client.reconnects >= 1, "the outage never happened"
     delivered = indices_delivered(server)
     captured = set(range(client._captured_ms // CHUNK_MS))
     missing = sorted(captured - delivered)
-    assert missing, "premise gone: this configuration should lose audio"
+    assert missing, "premise gone: this configuration should drop audio"
     assert client.dropped_seconds > 0, "the loss was not reported"
+    # What survived is the *newest* audio: staying live is the whole point.
+    assert max(delivered) >= max(captured) - 2
 
 
-async def test_a_ring_that_outlives_the_outage_loses_nothing():
-    """The fix. Every chunk captured reaches the server, drop or no drop."""
-    server, client = await run_outage(ring_seconds=6.0, outage_chunks=25)
+async def test_a_drop_inside_the_replay_window_still_loses_nothing():
+    """A short blip must behave exactly as it did before: lose nothing."""
+    server, client = await run_outage(outage_chunks=5, replay_seconds=10.0)
 
     assert client.reconnects >= 1, "the outage never happened"
     delivered = indices_delivered(server)
     captured = set(range(client._captured_ms // CHUNK_MS))
-    missing = sorted(captured - delivered)
-    assert not missing, f"audio never sent: chunks {missing[:12]}"
+    assert not sorted(captured - delivered), "a short drop lost audio"
     assert client.dropped_seconds == 0
+    assert client.status()["dropped_seconds"] == 0
 
 
-async def test_the_shipped_ring_covers_the_outage_run7_actually_had():
-    """45 s, against the 32.5 s outage a 10 s Wi-Fi drop produced."""
-    from app.soniox_client import RING_SECONDS
+async def test_the_replay_never_exceeds_the_window():
+    """The cap is what keeps the captions near-live after a reconnect.
 
-    assert RING_SECONDS >= 35.0, (
-        "the ring is back under the outage length measured on run7"
+    Without it, run7's 21.7 s replay left the stream ~20 s late for the rest
+    of the session, because Soniox acknowledges at about real time.
+    """
+    server, client = await run_outage(outage_chunks=25, replay_seconds=0.5)
+
+    after_outage = server.sockets[-1].sent_audio
+    # 0.5 s of window is 5 chunks; allow a chunk of slack at the boundary.
+    assert len(after_outage) <= 60, "more was replayed than the window allows"
+    assert after_outage, "nothing was sent on the new connection at all"
+
+
+async def test_the_audience_is_told_when_audio_was_dropped():
+    """A gap nobody is told about reads as the speaker changing the subject."""
+    announced: list[float] = []
+    server, client = await run_outage(
+        outage_chunks=25, replay_seconds=0.5,
+        on_audio_dropped=announced.append,
     )
+
+    assert announced, "the drop was never announced"
+    assert sum(announced) > 0
+    # One notice for one outage, however many attempts it took.
+    assert len(announced) == 1, f"{len(announced)} notices for one outage"
+
+
+async def test_no_notice_when_nothing_was_dropped():
+    announced: list[float] = []
+    await run_outage(outage_chunks=5, replay_seconds=10.0,
+                     on_audio_dropped=announced.append)
+    assert announced == []
 
 
 async def test_dns_failure_is_retried_fast_not_at_the_eight_second_cap():
@@ -887,7 +919,7 @@ async def test_a_recovered_error_clears_from_the_status():
 async def test_dropped_seconds_is_reported_to_the_operator():
     """Lost words should be a number on `/admin`, not something the operator
     infers from a sentence that reads oddly."""
-    server, client = await run_outage(ring_seconds=1.0, outage_chunks=25)
+    server, client = await run_outage(outage_chunks=25, replay_seconds=0.5)
     status = client.status()
     assert status["dropped_seconds"] > 0
     assert status["dropped_seconds"] == round(client.dropped_seconds, 1)

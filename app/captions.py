@@ -59,6 +59,14 @@ SENTENCE_ENDERS = ".?!؟"
 #: at a comma instead of a sentence end.
 CLAUSE_ENDERS = "،"
 
+#: Shown in place of speech the audience never received, one per stream.
+#: Both languages say the same thing, because a viewer reading Arabic needs
+#: to know a gap happened just as much as one reading English.
+NOTICE_TEXT = {
+    "en": "[connection interrupted]",
+    "ar": "[انقطع الاتصال]",
+}
+
 #: Characters a sentence may legitimately close with *after* its terminator.
 #: A cut lands after these, so reported speech is not split from its own
 #: closing quote.
@@ -89,9 +97,17 @@ class Paragraph:
     partial: str = ""
     changed_seq: int = 0
     closed: bool = False
+    #: A message from the system rather than something anyone said. The page
+    #: styles these differently so they are not mistaken for speech.
+    notice: bool = False
 
     def as_dict(self) -> dict:
-        return {"id": self.id, "final": self.final, "partial": self.partial}
+        out = {"id": self.id, "final": self.final, "partial": self.partial}
+        if self.notice:
+            # Only when set: it is rare, and every other paragraph would
+            # otherwise carry a field that is false on all of them.
+            out["notice"] = True
+        return out
 
     @property
     def empty(self) -> bool:
@@ -192,6 +208,38 @@ class CaptionState:
             if tail is not None and tail.final and not tail.closed:
                 self._gap[language] = True
         return changed
+
+    def add_notice(self, texts: dict[str, str] | None = None) -> bool:
+        """Mark a gap the audience should know about. Always changes something.
+
+        Used when audio was captured and then thrown away - a reconnect that
+        outlived the replay window (BUILD_SPEC Phase 5, and the decision of
+        2026-10-13 to stay live rather than catch up). Without it the captions
+        simply jump, and a reader has no way to tell a gap from a speaker
+        changing the subject.
+
+        The notice closes whatever was open and is itself closed, so the text
+        that follows starts cleanly rather than continuing a sentence that
+        lost its middle.
+        """
+        texts = texts or NOTICE_TEXT
+        self.seq += 1
+        for language in self.languages:
+            tail = self._tail(language)
+            if tail is not None and not tail.closed:
+                tail.closed = True
+                tail.partial = ""
+                tail.changed_seq = self.seq
+            para = Paragraph(id=self._next_id, changed_seq=self.seq,
+                             notice=True, closed=True)
+            self._next_id += 1
+            para.final = texts.get(language, NOTICE_TEXT.get(language, ""))
+            self.streams[language].append(para)
+            # The gap flag is irrelevant now: the next token opens its own
+            # paragraph, so there is nothing to be glued onto.
+            self._gap[language] = False
+        self._trim()
+        return True
 
     def finalize_partials(self) -> bool:
         """Commit every open partial as final text. True if anything changed.

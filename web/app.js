@@ -227,6 +227,10 @@
           nodes[para.id] = node;
           place(element, para.id);
         }
+        /* A notice is the server telling the room something was missed, not
+         * words anyone said. Set once, on creation - a paragraph never stops
+         * being one. */
+        if (para.notice) { node.element.className = 'notice'; }
         var finalText = para.final || '';
         var partialText = para.partial || '';
         if (node.final.textContent !== finalText) { node.final.textContent = finalText; }

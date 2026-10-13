@@ -38,8 +38,8 @@ from app.audio_source import AudioSource, FileSource, MicSource, describe_device
 from app.soniox_client import PAUSED, RECONNECTING, STREAMING, SonioxClient
 from app.broadcast import BroadcastHub
 from app.captions import CaptionState
-from app.replay import FakeSonioxClient
-from app.settings import RECORDING_DIR, ROOT, WEB_DIR, settings
+from app.replay import CaptureWriter, FakeSonioxClient
+from app.settings import LOG_DIR, RECORDING_DIR, ROOT, WEB_DIR, settings
 
 #: Where a replayable capture may come from. A request names a capture by
 #: bare filename and it is looked up here, so no request can reach a path of
@@ -85,11 +85,13 @@ class CaptionSession:
         self.paced = True
         self.started_at: float | None = None
         self.responses = 0
+        self.dropped_seconds = 0.0
         self.error: str | None = None
         self._task: asyncio.Task | None = None
         self._client: FakeSonioxClient | None = None
         self._audio: AudioSource | None = None
         self._engine: SonioxClient | None = None
+        self._capture: CaptureWriter | None = None
         self._logged = True
 
     @property
@@ -110,6 +112,7 @@ class CaptionSession:
         self.source = source
         self.started_at = time.time()
         self.responses = 0
+        self.dropped_seconds = 0.0
         self.error = None
         self._logged = False
         self.state.set_live(True)
@@ -180,7 +183,8 @@ class CaptionSession:
             await source.close()
             self._finish(seconds)
 
-    async def start_live(self, source: AudioSource, **client_kwargs) -> None:
+    async def start_live(self, source: AudioSource, *, capture: bool = False,
+                         **client_kwargs) -> None:
         """The real thing: microphone -> Soniox -> captions -> phones.
 
         **This spends money.** Everything else in this class is free; this is
@@ -201,9 +205,20 @@ class CaptionSession:
             source,
             on_state=self._on_engine_state,
             on_drop=self._on_engine_drop,
+            on_audio_dropped=self._on_audio_dropped,
             **client_kwargs,
         )
         self._engine = client
+        self._capture = None
+        if capture:
+            # Opt-in: a capture is a verbatim transcript of the room. It is
+            # also the only way to answer a token-level question after the
+            # fact, and it produces a file that replays as a test fixture.
+            stamp = time.strftime("%Y-%m-%d-%H%M%S")
+            self._capture = CaptureWriter(
+                LOG_DIR / f"live-{stamp}.jsonl",
+                meta={"source": source.describe(), "config": client._config},
+            )
         self._begin(mode=source.kind, engine="soniox", source=source.describe())
         self.state.set_status("connecting")
         self._task = asyncio.create_task(self._run_live(client), name="live")
@@ -232,10 +247,24 @@ class CaptionSession:
         if self.state.mark_gap():
             self.hub.notify()
 
+    def _on_audio_dropped(self, seconds: float) -> None:
+        """Speech was captured and never sent. Say so on the page.
+
+        The alternative to a replay that keeps the captions permanently late
+        (the decision of 2026-10-13) is a visible gap, and a gap nobody is
+        told about reads as the speaker changing the subject.
+        """
+        self.dropped_seconds += seconds
+        self.state.add_notice()
+        self.hub.notify()
+
     async def _run_live(self, client: SonioxClient) -> None:
         try:
             async for response in client:
                 self.responses += 1
+                if self._capture is not None:
+                    self._capture.add(response,
+                                      sent_ms=round(client.audio_seconds_sent * 1000))
                 if self.state.add_response(response):
                     self.hub.notify()
         except asyncio.CancelledError:
@@ -243,6 +272,8 @@ class CaptionSession:
         except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
         finally:
+            if self._capture is not None:
+                self._capture.close()
             if client.last_error and not self.error:
                 self.error = "{}: {}".format(
                     client.last_error.get("error_type"),
@@ -310,6 +341,11 @@ class CaptionSession:
             "source": self.source,
             "paced": self.paced,
             "responses": self.responses,
+            # From the session, not the engine, so it survives the engine
+            # being torn down at Stop - the operator wants to know what was
+            # lost *after* the talk, not only during it.
+            "dropped_seconds": round(self.dropped_seconds, 1),
+            "capture": str(self._capture.path) if self._capture else None,
             "error": self.error,
             "elapsed": (
                 round(time.time() - self.started_at, 1)
@@ -525,6 +561,9 @@ async def admin_start(
     device: int | None = None,
     channel: int = 1,
     record: bool = False,
+    # Not `capture`: that already names the replay file to play back. This
+    # one records the engine's raw responses from a live run.
+    log_responses: bool = False,
     paced: bool = True,
 ) -> JSONResponse:
     """Start a session.
@@ -572,7 +611,7 @@ async def admin_start(
                 detail=f"could not open device {device}: {exc}",
             ) from exc
         try:
-            await session.start_live(mic)
+            await session.start_live(mic, capture=log_responses)
         except HTTPException:
             raise
         except Exception as exc:

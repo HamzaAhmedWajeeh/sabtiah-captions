@@ -126,15 +126,38 @@ carries a response, and the incident moves to `recovered_errors` so it is
 still visible after the fact. `engine_recovered` on the status says how many
 times that happened.
 
-### Still unmeasured after run7
+### The replay-versus-delay decision (Hamza, 2026-10-13)
 
-- **A replay leaves the captions behind.** Soniox acknowledges at roughly real
-  time, so replaying 20 s left run7 running ~20 s late for its remaining 110
-  seconds. With a 45 s ring a long outage could leave the captions 45 s behind,
-  which for a live audience may be worse than losing the words. There is no
-  policy for this yet and it needs a decision, not a default.
-- `dropped_seconds` now reports audio the ring could not cover, but it has
-  never been seen on a real run.
+run7 raised a question the spec does not answer. Soniox acknowledges at about
+real time, so replaying N seconds leaves the captions N seconds late **for the
+rest of the session** - run7 replayed 21.7 s and then ran ~20 s behind for its
+remaining 110 seconds. A bigger ring makes that worse, not better.
+
+**Decision: prefer staying live.**
+
+- At most **10 s** is replayed after a reconnect (`MAX_REPLAY_SECONDS`). A
+  short drop still loses nothing, which is the common case.
+- A longer outage drops its **oldest** audio and keeps the newest, so the
+  captions resume near real time rather than narrating the past.
+- The gap is announced: `CaptionState.add_notice()` inserts a short paragraph
+  in **both** streams - `[connection interrupted]` and `[انقطع الاتصال]` -
+  styled as an aside so it cannot be mistaken for speech. One notice per
+  outage, however many reconnect attempts it took, and none at all when
+  nothing was lost.
+- `dropped_seconds` is on `/admin` and survives the session being stopped.
+
+The ring is back to BUILD_SPEC's **20 s**; it only has to outlive the replay
+window, and the 45 s of the previous commit was sized for a goal that no
+longer applies.
+
+Tested in `test_an_outage_longer_than_the_replay_window_drops_the_oldest`,
+`test_a_drop_inside_the_replay_window_still_loses_nothing`,
+`test_the_audience_is_told_when_audio_was_dropped` and
+`test_a_long_outage_puts_a_notice_on_the_page`.
+
+### Still unmeasured
+
+- The notice and `dropped_seconds` have never been seen on a real run.
 - Acceptance 4, the 60-minute soak, still has not been run. It needs no credit.
 
 ## Things found while writing these tests
@@ -158,14 +181,17 @@ times that happened.
 
 One short run, after the run7 fixes:
 
-1. Speak a sentence with `agents` and `agent` in it, and `ChatGPT` — the two
-   terms run7 could not settle.
-2. Drop Wi-Fi mid-sentence for ~10 s. Confirm the sentence spoken during the
-   drop now **does** appear, and that the join reads `behind ChatGPT` rather
-   than `behindChatGPT`.
-3. Watch `dropped_seconds` on `/admin`: it should stay at 0.
-4. After recovery, confirm the last error has cleared and `engine_recovered`
-   is 1.
+1. **Tick "Log raw responses"** on `/admin` before starting. It writes
+   `logs/live-<date>.jsonl`, which replays as a test fixture and is the only
+   way to answer token-level questions afterwards — the Arabic-in-English
+   phrase from run7 is still unexplained for exactly this reason.
+2. Say `agent` (singular) in a sentence. run7 only ever tested the plural.
+3. Drop Wi-Fi mid-sentence for ~10 s and keep talking. Confirm:
+   - the join reads `... behind ChatGPT`, not `behindChatGPT`;
+   - captions come back **near real time**, not twenty seconds late;
+   - if anything was dropped, `[connection interrupted]` appears in both
+     streams and `dropped_seconds` is non-zero on `/admin`;
+   - the last error has cleared and `engine_recovered` is 1.
 
 Separately, and with a deliberately wrong key, acceptance 3 is still unrun
 live: one start, one error, no retry loop.

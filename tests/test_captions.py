@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 from app.captions import (  # noqa: E402
     CLAUSE_ENDERS,
     CLOSERS,
+    NOTICE_TEXT,
     SENTENCE_ENDERS,
     CaptionState,
     Paragraph,
@@ -749,3 +750,85 @@ def test_the_inserted_space_is_a_legal_break_point():
     assert "x" * 45 in joined
     assert "tail" in joined
     assert "xtail" not in joined
+
+
+# ---------------------------------------------------------------------------
+# The gap notice (decision of 2026-10-13: prefer staying live)
+# ---------------------------------------------------------------------------
+
+
+def test_a_notice_appears_in_both_streams():
+    """A viewer reading Arabic needs to know about a gap as much as one
+    reading English."""
+    state = CaptionState()
+    state.add_response(response(token("before", lang="en"),
+                                token("قبل", lang="ar")))
+    assert state.add_notice() is True
+
+    for language, expected in NOTICE_TEXT.items():
+        texts = [p.final for p in state.streams[language]]
+        assert expected in texts, f"{language} has no notice: {texts}"
+
+
+def test_a_notice_is_marked_so_the_page_can_style_it():
+    """It is not something anyone said, and must not read as speech."""
+    state = CaptionState()
+    state.add_notice()
+    para = state.streams["en"][-1]
+    assert para.notice is True
+    assert para.as_dict()["notice"] is True
+    # Ordinary paragraphs stay as they were - the field is absent, not false,
+    # so every other paragraph on the wire is unchanged.
+    state.add_response(response(token("speech", lang="en")))
+    assert "notice" not in state.streams["en"][-1].as_dict()
+
+
+def test_a_notice_closes_what_was_open_and_does_not_continue_it():
+    state = CaptionState()
+    state.add_response(response(token("a sentence cut in", lang="en")))
+    state.add_notice()
+    state.add_response(response(token("half", lang="en")))
+
+    paragraphs = [p.final for p in state.streams["en"]]
+    assert paragraphs == ["a sentence cut in", NOTICE_TEXT["en"], "half"]
+    assert state.streams["en"][0].closed
+    assert state.streams["en"][1].closed
+
+
+def test_a_notice_drops_any_pending_grey_text():
+    """The partial was speculation about audio that never arrived."""
+    state = CaptionState()
+    state.add_response(response(token("said", lang="en")))
+    state.add_response(response(token(" guessing", final=False, lang="en")))
+    state.add_notice()
+    assert all(p.partial == "" for p in state.streams["en"])
+
+
+def test_a_notice_bumps_the_sequence_so_it_reaches_viewers():
+    state = CaptionState()
+    mark = state.seq
+    state.add_notice()
+    assert state.seq > mark
+    diff = state.diff_since(mark)
+    sent = [p for p in diff["streams"]["en"]]
+    assert any(p.get("notice") for p in sent), "the notice was not broadcast"
+
+
+def test_a_notice_counts_against_the_paragraph_cap():
+    """Otherwise a flapping connection grows the page without bound."""
+    state = CaptionState(max_paragraphs=3)
+    for _ in range(6):
+        state.add_notice()
+    assert len(state.streams["en"]) == 3
+
+
+def test_a_notice_clears_the_reconnect_gap_flag():
+    """The next token opens a fresh paragraph, so there is nothing to join to
+    and no space to insert."""
+    state = CaptionState()
+    state.add_response(response(token("before", lang="en")))
+    state.mark_gap()
+    state.add_notice()
+    state.add_response(response(token("after", lang="en")))
+    assert state.streams["en"][-1].final == "after"
+    assert not state.streams["en"][-1].final.startswith(" ")

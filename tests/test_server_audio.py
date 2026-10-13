@@ -30,6 +30,7 @@ from app import main as server  # noqa: E402
 from app import audio_source  # noqa: E402
 from app import usage  # noqa: E402
 from app.audio_source import SAMPLE_RATE, FileSource  # noqa: E402
+from app.captions import NOTICE_TEXT, CaptionState  # noqa: E402
 from app.main import (  # noqa: E402
     CaptionSession,
     admin_devices,
@@ -43,6 +44,7 @@ from app.main import (  # noqa: E402
 from app.settings import settings  # noqa: E402
 from test_soniox_client import (  # noqa: E402
     DropsOnce,
+    OutageOfLength,
     ErrorsOnce,
     FakeServer,
     FakeSocket,
@@ -544,3 +546,126 @@ async def test_stopping_a_live_run_closes_the_socket_and_the_device(
     assert server.sockets[0]._done is True
     streamed = json.loads((await admin_status(token=TOKEN)).body)
     assert streamed["running"] is False
+
+
+async def test_a_long_outage_puts_a_notice_on_the_page(
+    fresh_session, recordings, monkeypatch
+):
+    """The decision of 2026-10-13, end to end: audio older than the replay
+    window is dropped, and the room is told."""
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+
+    # Three seconds of audio and an outage that outlives the replay window,
+    # so the drop is a certainty rather than a race.
+    long_tone = recordings / "long.wav"
+    samples = np.rint(
+        np.sin(2 * np.pi * 440 * np.arange(SAMPLE_RATE * 3) / SAMPLE_RATE)
+        * 0.5 * 32767
+    ).astype(np.int16)
+    with wave.open(str(long_tone), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(SAMPLE_RATE)
+        wav.writeframes(samples.tobytes())
+
+    server = OutageOfLength(after=3, outage_chunks=12)
+    source = FileSource(long_tone, realtime=True)
+    await fresh_session.start_live(
+        source, connect=server, api_key="test-key", max_replay_seconds=0.2,
+    )
+    server.client = fresh_session._engine
+
+    for _ in range(400):
+        await asyncio.sleep(0.01)
+        if fresh_session.dropped_seconds > 0:
+            break
+    await admin_stop(token=TOKEN)
+
+    assert fresh_session.dropped_seconds > 0, "nothing was reported dropped"
+    notices = [
+        p for lang in ("en", "ar")
+        for p in fresh_session.state.streams[lang] if p.notice
+    ]
+    assert notices, "the audience was never told"
+    assert {p.final for p in notices} == set(NOTICE_TEXT.values())
+
+    body = json.loads((await admin_status(token=TOKEN)).body)
+    assert body["dropped_seconds"] > 0
+
+
+async def test_a_short_blip_puts_no_notice_on_the_page(
+    fresh_session, recordings, monkeypatch
+):
+    """A drop inside the replay window loses nothing, so it says nothing."""
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    server = DropsOnce(after=2)
+    source = FileSource(recordings / "tone.wav", realtime=True)
+
+    await fresh_session.start_live(source, connect=server, api_key="test-key",
+                                   max_replay_seconds=30.0)
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if server.connections >= 2:
+            break
+    await asyncio.sleep(0.1)
+    await admin_stop(token=TOKEN)
+
+    assert fresh_session.dropped_seconds == 0
+    assert not [p for lang in ("en", "ar")
+                for p in fresh_session.state.streams[lang] if p.notice]
+
+
+async def test_a_captured_live_run_replays_as_a_fixture(
+    fresh_session, recordings, tmp_path, monkeypatch
+):
+    """The loop closing: a live run can become a regression test.
+
+    run7 raised a token-level question - did Soniox really label that Arabic
+    phrase `en`? - that could not be answered because a live run kept no
+    token-level record. A capture written here reads back through
+    `load_capture` and replays through `FakeSonioxClient`, which is how every
+    other finding in this project became checkable.
+    """
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    monkeypatch.setattr(server, "LOG_DIR", tmp_path / "logs")
+    import app.main as main_module
+    monkeypatch.setattr(main_module, "LOG_DIR", tmp_path / "logs")
+
+    fake = FakeServer()
+    source = FileSource(recordings / "tone.wav", realtime=False)
+    await fresh_session.start_live(source, connect=fake, api_key="test-key",
+                                   capture=True)
+    await finish(fresh_session)
+
+    written = list((tmp_path / "logs").glob("live-*.jsonl"))
+    assert len(written) == 1, f"no capture written: {written}"
+
+    from app.replay import FakeSonioxClient, load_capture
+    meta, records = load_capture(written[0])
+    assert meta["config"]["model"] == "stt-rt-v5"
+    assert records, "the capture has no responses"
+
+    # ...and it drives CaptionState to the same text, with no network.
+    replayed = CaptionState()
+    client = FakeSonioxClient(written[0])
+    async for resp in client:
+        replayed.add_response(resp)
+    assert replayed.render("en").strip() == fresh_session.state.render("en").strip()
+
+
+async def test_no_capture_is_written_unless_asked(
+    fresh_session, recordings, tmp_path, monkeypatch
+):
+    """A capture is a verbatim transcript of the room (CLAUDE.md)."""
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    import app.main as main_module
+    monkeypatch.setattr(main_module, "LOG_DIR", tmp_path / "logs")
+
+    fake = FakeServer()
+    source = FileSource(recordings / "tone.wav", realtime=False)
+    await fresh_session.start_live(source, connect=fake, api_key="test-key")
+    await finish(fresh_session)
+
+    assert not (tmp_path / "logs").exists() or not list(
+        (tmp_path / "logs").glob("live-*.jsonl")
+    )

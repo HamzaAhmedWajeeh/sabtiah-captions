@@ -114,20 +114,25 @@ MAX_UNKNOWN_ATTEMPTS = 3
 #: is a dropped connection mid-talk.
 KEEPALIVE_SECONDS = 20.0
 
-#: Audio kept for replay after a drop. BUILD_SPEC says 20 s, sized against
-#: its own acceptance test of a 10 s Wi-Fi drop. **Run7 (2026-10-13) showed
-#: that is not what a 10 s drop costs**: the radio was off for about ten
-#: seconds, DNS stayed broken afterwards, and the connection was down for
-#: 32.5 s. The ring held 20 s, so the oldest 12.5 s - the speech immediately
-#: after the drop, which is the part anyone notices - was gone before the
-#: reconnect. 45 s covers that outage with room to spare and costs about
-#: 1.4 MB of memory.
+#: Audio kept for replay after a drop. It only has to outlive
+#: `MAX_REPLAY_SECONDS` below, so BUILD_SPEC's 20 s is enough again - the 45 s
+#: of the previous commit was sized to *lose nothing*, which is no longer the
+#: goal.
+RING_SECONDS = 20.0
+
+#: **The most that is ever re-sent after a reconnect**, and the decision that
+#: shapes this whole module's behaviour on a bad network (Hamza, 2026-10-13):
+#: *prefer staying live*.
 #:
-#: It is not free to raise without limit: every re-sent second is billed, and
-#: because Soniox acknowledges at roughly real time, replaying N seconds
-#: leaves the captions N seconds behind for the rest of the session. Run7 sat
-#: ~20 s behind after its reconnect. See `dropped_seconds`.
-RING_SECONDS = 45.0
+#: Soniox acknowledges at roughly real time, so replaying N seconds leaves the
+#: captions N seconds late for the rest of the session - run7 replayed 21.7 s
+#: and then ran ~20 s behind for its remaining 110 seconds. For an audience
+#: reading a live talk that is worse than missing the words: late captions are
+#: wrong captions, attached to whatever the speaker is saying now.
+#:
+#: So a short drop still loses nothing, a long one loses its oldest audio, and
+#: `CaptionState.add_notice` tells the room it happened.
+MAX_REPLAY_SECONDS = 10.0
 
 #: Proactive rollover, under the documented 300-minute cap.
 ROLLOVER_MS = 280 * 60 * 1000
@@ -246,6 +251,8 @@ class SonioxClient:
         idle_stop_seconds: float = IDLE_STOP_SECONDS,
         silence_rms: float = SILENCE_RMS,
         max_unknown_attempts: int = MAX_UNKNOWN_ATTEMPTS,
+        max_replay_seconds: float = MAX_REPLAY_SECONDS,
+        on_audio_dropped: Callable[[float], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._audio = audio
@@ -261,6 +268,8 @@ class SonioxClient:
         self.idle_stop_seconds = idle_stop_seconds
         self.silence_rms = silence_rms
         self.max_unknown_attempts = max_unknown_attempts
+        self.max_replay_seconds = max_replay_seconds
+        self._on_audio_dropped = on_audio_dropped
         #: Injected so the idle auto-stop can be tested without waiting ten
         #: minutes. It cannot be tested by scaling the timeout down either:
         #: on Windows `asyncio.sleep(0.01)` routinely returns without
@@ -294,6 +303,11 @@ class SonioxClient:
         self._acked_ms = 0
         self._global_acked_ms = 0
         self._dropped_to = 0
+        #: Dropped audio not yet announced. Held until a connection is proved
+        #: working, so a failed attempt does not put a notice on the page for
+        #: a reconnect that never happened - and a storm of attempts produces
+        #: one notice, not seven.
+        self._pending_drop = 0.0
         self._conn_responses = 0
 
         self._ring: deque[tuple[int, bytes]] = deque()
@@ -408,7 +422,9 @@ class SonioxClient:
         Built without awaiting, so the pump cannot interleave a live chunk
         into the middle of the replay.
         """
-        floor = self._captured_ms - int(self.ring_seconds * 1000)
+        # The replay window, not the ring, is what bounds how far back we go:
+        # the ring is just storage, this is policy.
+        floor = self._captured_ms - int(self.max_replay_seconds * 1000)
         resume_from = max(self._global_acked_ms, floor)
         if floor > self._global_acked_ms:
             # The outage outlived the ring. Whatever Soniox never acknowledged
@@ -418,6 +434,7 @@ class SonioxClient:
             lost = (floor - max(self._global_acked_ms, self._dropped_to)) / 1000
             if lost > 0:
                 self.dropped_seconds += lost
+                self._pending_drop += lost
                 self._dropped_to = floor
         queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         replayed = [c for end_ms, c in self._ring if end_ms > resume_from]
@@ -557,13 +574,21 @@ class SonioxClient:
             if data.get("tokens"):
                 self.responses += 1
                 self._conn_responses += 1
-                if (self._conn_responses == HEALTHY_AFTER_RESPONSES
-                        and self.last_error is not None):
-                    # Recovered. Leaving the old error on `/admin` makes a
-                    # working session look broken - run7 finished healthy with
-                    # a DNS failure still showing as the last error.
-                    self.recovered_errors.append(self.last_error)
-                    self.last_error = None
+                if self._conn_responses == HEALTHY_AFTER_RESPONSES:
+                    if self.last_error is not None:
+                        # Recovered. Leaving the old error on `/admin` makes a
+                        # working session look broken - run7 finished healthy
+                        # with a DNS failure still showing as the last error.
+                        self.recovered_errors.append(self.last_error)
+                        self.last_error = None
+                    if self._pending_drop > 0:
+                        # Announced here rather than when the audio was
+                        # discarded: this is the first moment the page is
+                        # certainly live again, so the notice lands in front
+                        # of the text that follows it.
+                        dropped, self._pending_drop = self._pending_drop, 0.0
+                        if self._on_audio_dropped is not None:
+                            self._on_audio_dropped(dropped)
                 self._events.put_nowait(("response", data))
             if data.get("finished"):
                 return "finished"

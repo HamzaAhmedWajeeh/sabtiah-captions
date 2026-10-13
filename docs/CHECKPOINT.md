@@ -311,11 +311,12 @@ and three phones at once.
    `behindChatGPT`, `dropped_seconds` stays 0, and the error clears after
    recovery. Also the two unsettled terms (`agents`, `agent`, `ChatGPT`).
    Checklist in `docs/resilience-test.md`.
-2. **A replay leaves the captions behind, and there is no policy for it.**
-   Soniox acknowledges at about real time, so the 21.7 s run7 replayed left
-   captions ~20 s late for the rest of the session. With the ring now at 45 s
-   a long outage could leave them 45 s late, which for a live audience may be
-   worse than losing the words. Needs a decision, not a default.
+2. ~~**A replay leaves the captions behind**~~ — **decided 2026-10-13:
+   prefer staying live.** At most 10 s is replayed after a reconnect; a longer
+   outage drops its oldest audio and says so with a
+   `[connection interrupted]` / `[انقطع الاتصال]` paragraph in both streams.
+   The ring is back to 20 s. Details in `docs/resilience-test.md`. **Not yet
+   seen on a real run.**
 3. ~~**`translation_terms` is untested**~~ and ~~**the terms clip is
    owed**~~ — **both closed by run7.** The experiment was done with live
    speech instead of a recording: Hamza said the terms into the microphone,
@@ -348,19 +349,29 @@ and three phones at once.
    permissions are fine. The headset is not connected, not powered, or muted.
    Plug it in and re-run `uv run python tools/list_devices.py --listen 5
    --device 17` before the live test.
-7. **Saudi dialect is still unmeasured.** `recordings/saudi-5min.m4a` is MSA
+7. **`agents` is a known limitation, accepted.** It is in
+   `translation_terms` and was translated anyway, to `أجهزة` ("devices"). The
+   next run tests the singular `agent`. If that fails too the options are to
+   live with it or to map `agents` to a chosen Arabic word rather than letting
+   the model pick.
+8. **One Arabic phrase landed in the English stream on run7**, and it cannot
+   be explained from the data: a live run kept no token-level record. The
+   reasoning, and why it is almost certainly Soniox's labelling rather than a
+   routing bug, is in `docs/soniox-notes.md`. `/admin` can now log raw
+   responses, which turns this into a one-line grep after the next run.
+9. **Saudi dialect is still unmeasured.** `recordings/saudi-5min.m4a` is MSA
    news register about Yemen with zero distinctively Saudi lexis. Needs
    casual Saudi conversation. The audience is Saudi; the only dialect
    measured is Egyptian.
-8. **Long sessions untested against the real server.** The rollover, the
+10. **Long sessions untested against the real server.** The rollover, the
    keepalive and the idle auto-stop all have tests, but none has run for real.
    The 60-minute `FileSource` soak in BUILD_SPEC's acceptance 4 needs no
    credit and has not been done.
-9. **`config/session.yaml` is empty.** Filling `speakers` would likely fix
+11. **`config/session.yaml` is empty.** Filling `speakers` would likely fix
    `جودت` → "Goudat" in run1. Cheap win, no API cost.
-10. **Three phones at once, and the other mobile browser, untested.** One
+12. **Three phones at once, and the other mobile browser, untested.** One
    phone works. The spec wants iOS Safari and Android Chrome at 360 px.
-11. **The venue USB interface has never been plugged in.** `MicSource` takes
+13. **The venue USB interface has never been plugged in.** `MicSource` takes
    `--channel` and resamples, which is what a multi-channel interface needs,
    but every live check so far has been the laptop's built-in array.
 

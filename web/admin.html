@@ -70,6 +70,10 @@
         <input type="checkbox" id="record">
         Record this run to <code>recordings/</code>
       </label>
+      <label data-for="live">
+        <input type="checkbox" id="log-responses">
+        Log raw responses to <code>logs/</code> (replays as a test fixture)
+      </label>
     </div>
 
     <p class="note" id="hint"></p>
@@ -109,9 +113,11 @@
         <tr><th>Refused / dropped</th><td id="s-shed">—</td></tr>
         <tr><th>Audio dropped</th><td id="s-audio-dropped">—</td></tr>
         <tr><th>Recording</th><td id="s-recording">—</td></tr>
+        <tr><th>Response log</th><td id="s-capture">—</td></tr>
         <tr><th>Connection</th><td id="s-engine">—</td></tr>
         <tr><th>Caption delay</th><td id="s-lag">—</td></tr>
         <tr><th>Reconnects / rollovers</th><td id="s-retries">—</td></tr>
+        <tr><th>Audio dropped (never sent)</th><td id="s-lost">—</td></tr>
         <tr><th>Silence</th><td id="s-silence">—</td></tr>
         <tr><th>Last error</th><td id="s-error">—</td></tr>
       </tbody>

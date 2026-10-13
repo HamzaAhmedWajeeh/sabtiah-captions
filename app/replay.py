@@ -22,6 +22,7 @@ import asyncio
 import json
 import time
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -87,3 +88,52 @@ class FakeSonioxClient:
                     await asyncio.sleep(delay)
             self.sent_ms = row.get("sent_ms", self.sent_ms)
             yield row["response"]
+
+
+class CaptureWriter:
+    """Write a live run to the same JSONL format `load_capture` reads.
+
+    The counterpart of everything above, and the missing half of the loop: a
+    live run used to leave no token-level record at all, so a question like
+    "did Soniox really label that Arabic phrase `en`?" could not be answered
+    after the fact (run7, 2026-10-13). A run captured here can be replayed
+    through `FakeSonioxClient`, dropped into `tests/fixtures/` and turned into
+    a regression test, which is how every other finding in this project became
+    checkable.
+
+    Off by default, because a capture is a verbatim transcript of whatever was
+    said in the room (CLAUDE.md: logging off unless the operator turns it on).
+    Lands in `logs/`, which is gitignored and not servable.
+    """
+
+    def __init__(self, path: str | Path, meta: dict | None = None) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.responses = 0
+        self._t0 = time.perf_counter()
+        self._fh = self.path.open("w", encoding="utf-8")
+        self._write({
+            "recv_at": datetime.now(timezone.utc).isoformat(),
+            "meta": meta or {},
+        })
+
+    def _write(self, row: dict) -> None:
+        self._fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        # Flushed per line: a run that ends in a crash is exactly the run
+        # whose capture is worth having.
+        self._fh.flush()
+
+    def add(self, response: dict, *, sent_ms: int = 0) -> None:
+        self.responses += 1
+        self._write({
+            "recv_at": datetime.now(timezone.utc).isoformat(),
+            "recv_offset_ms": round((time.perf_counter() - self._t0) * 1000),
+            "sent_ms": sent_ms,
+            "response": response,
+        })
+
+    def close(self) -> None:
+        try:
+            self._fh.close()
+        except Exception:
+            pass
