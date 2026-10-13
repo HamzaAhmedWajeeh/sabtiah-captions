@@ -85,6 +85,42 @@
   </fieldset>
 
   <fieldset>
+    <legend>This talk</legend>
+    <p class="note">
+      Private: these stay on this laptop and go only to the transcription
+      API. They never appear on the audience page. One name per line.
+    </p>
+    <div class="row">
+      <label class="wide">Title
+        <input type="text" id="d-title" autocomplete="off">
+      </label>
+    </div>
+    <div class="row">
+      <label class="wide">Speakers
+        <textarea id="d-speakers" rows="3" autocomplete="off"></textarea>
+      </label>
+      <label class="wide">Companies
+        <textarea id="d-companies" rows="3" autocomplete="off"></textarea>
+      </label>
+    </div>
+    <div class="row">
+      <label class="wide">Extra terms for this talk
+        <textarea id="d-terms" rows="3" autocomplete="off"></textarea>
+      </label>
+      <label class="wide">Notes
+        <textarea id="d-notes" rows="3" autocomplete="off"></textarea>
+      </label>
+    </div>
+    <p class="note" id="d-glossary"></p>
+    <div class="row">
+      <button type="button" id="d-save" class="primary">Save</button>
+      <button type="button" id="d-apply" hidden>Apply now</button>
+      <button type="button" id="d-clear">Clear session details</button>
+      <span id="d-state" class="note"></span>
+    </div>
+  </fieldset>
+
+  <fieldset>
     <legend>Input level</legend>
     <!-- aria-hidden: the numbers beside the bar carry the same information,
          and a bar repainted ten times a second is noise to a screen reader. -->
@@ -119,6 +155,7 @@
         <tr><th>Audio dropped</th><td id="s-audio-dropped">—</td></tr>
         <tr><th>Recording</th><td id="s-recording">—</td></tr>
         <tr><th>Response log</th><td id="s-capture">—</td></tr>
+        <tr><th>Talk details</th><td id="s-details">—</td></tr>
         <tr><th>Connection</th><td id="s-engine">—</td></tr>
         <tr><th>Caption delay</th><td id="s-lag">—</td></tr>
         <tr><th>Reconnects / rollovers</th><td id="s-retries">—</td></tr>

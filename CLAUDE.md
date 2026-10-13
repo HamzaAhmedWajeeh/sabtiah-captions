@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-**Phases 0–5 are done. Phase 6 (operator page, context, glossary) is next.**
+**Phases 0–5 are done, and Phase 6's session context is done early. The rest of Phase 6 (logging toggles, translation direction, clear-captions) is next.**
 
 **No live run has ever happened.** Phase 5 is tested end to end against a scripted socket; the four acceptance checks in `docs/resilience-test.md` have their offline halves done and their live halves outstanding. Ask Hamza before the first live run.
 
@@ -12,7 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. It paces a capture at real time, so the pages can be judged at true speed.
 - **Phase 3** is `app/broadcast.py` (viewer hub), `app/main.py` (routes, `/ws`, the replay session) and the three pages in `web/`.
 - **Phase 4** is `app/audio_source.py` (`MicSource`, `FileSource`), `tools/list_devices.py`, the admin level meter and `app/usage.py` (the `logs/usage.jsonl` spend ledger).
-- **Phase 5** is `app/soniox_client.py`: ring buffer, backoff, error classification, keepalive, rollover, idle auto-stop. **279 tests, all offline** — it takes its `connect` as an argument and imports `websockets` lazily, so no test can reach Soniox even by accident. Keep it that way.
+- **Phase 5** is `app/soniox_client.py`: ring buffer, backoff, error classification, keepalive, rollover, idle auto-stop. It takes its `connect` as an argument and imports `websockets` lazily, so no test can reach Soniox even by accident. Keep it that way.
+- **Session context (Phase 6, early)** is editable from `/admin` at runtime: save writes `config/session.yaml` atomically, and "Apply now" reconnects through the rollover path so a mid-talk change costs no audio and shows the audience nothing. **393 tests, all offline.**
 - **`docs/CHECKPOINT.md` is the short version**: what is done, what is next, the open items, and Soniox audio spent (**22.0 minutes** of the $10 budget so far).
 - Two findings matter most for the phases ahead. **Endpoint detection can effectively never fire** — `run4-saudi` gave one `<end>` in 300 s — so `<end>` is not a reliable paragraph break and `captions.py` adds a soft size break. And **nothing stays in Latin script in Arabic captions**: `RAG`/`MCP`/`LLM` get transliterated in the `en`→`ar` direction. The `translation_terms` fix in `config/glossary.yaml` is untested and is the highest-value remaining experiment.
 
@@ -120,6 +121,7 @@ treat the API as the scarce resource it is.
 
 ## Security invariants
 
+- **Session details are private.** Speaker names, the talk title, companies and the operator's notes live in `config/session.yaml`, which is **gitignored** — this repo is public. They may reach only the Soniox `context` object and `/admin` behind its token. Never the audience pages, the viewer socket, `/admin/status`, `logs/usage.jsonl`, a response log, a capture, or an error message; those carry counts at most (`SessionContext.summary()`). `tests/test_session_privacy.py` enforces this with values that cannot occur by accident — it already caught one leak, the Soniox config being written verbatim into the response log's meta line.
 - `SONIOX_API_KEY` lives only in `.env` on the laptop. Never in the browser, logs, or git. There is a test that greps served static files for `SONIOX`.
 - `/admin` requires `ADMIN_TOKEN` with a constant-time compare, and is never linked from the audience page. Audience endpoints are read-only.
 - `logs/`, `recordings/`, `clips/` are gitignored and never served over HTTP. Logging and recording are both off by default — privacy consent matters; captions without logging is always allowed.

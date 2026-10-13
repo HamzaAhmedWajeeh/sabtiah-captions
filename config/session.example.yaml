@@ -1,0 +1,17 @@
+# Copy to config/session.yaml and fill in on the day.
+#
+# **The real file is local only and is gitignored.** Speaker names, the talk
+# title and the operator's notes are not public, and this repository is. Edit
+# them from /admin rather than by hand; /admin writes this file atomically and
+# applies the change without a restart.
+#
+# These values go to exactly two places: the Soniox `context` object, which is
+# what makes names come out spelled right, and the operator page behind its
+# token. They never reach the audience pages, the viewer socket, or any log.
+title: ""
+speakers: []
+companies: []
+# Vocabulary for this talk only. Merged with config/glossary.yaml, which stays
+# in git because it is public technical vocabulary.
+terms: []
+notes: ""

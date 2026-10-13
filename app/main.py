@@ -35,11 +35,28 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app import usage
 from app.audio_source import AudioSource, FileSource, MicSource, describe_devices
-from app.soniox_client import PAUSED, RECONNECTING, STREAMING, SonioxClient
+from app.soniox_client import (
+    PAUSED,
+    RECONNECTING,
+    STREAMING,
+    SonioxClient,
+    base_config,
+)
 from app.broadcast import BroadcastHub
 from app.captions import CaptionState
 from app.replay import CaptureWriter, FakeSonioxClient
-from app.settings import LOG_DIR, RECORDING_DIR, ROOT, WEB_DIR, settings
+from app.settings import (
+    LOG_DIR,
+    RECORDING_DIR,
+    ROOT,
+    WEB_DIR,
+    SessionContext,
+    build_context,
+    load_glossary,
+    load_session,
+    save_session,
+    settings,
+)
 
 #: Where a replayable capture may come from. A request names a capture by
 #: bare filename and it is looked up here, so no request can reach a path of
@@ -92,6 +109,14 @@ class CaptionSession:
         self._audio: AudioSource | None = None
         self._engine: SonioxClient | None = None
         self._capture: CaptureWriter | None = None
+        #: This talk's private details, held in memory so an edit applies
+        #: without a restart. Loaded from the gitignored config/session.yaml,
+        #: which may not exist - a fresh clone has none and that is normal.
+        self.details = load_session()
+        #: True once the details have changed under a running engine, until
+        #: `apply_details` reconnects. The operator needs to know that what
+        #: they typed is saved but not yet in effect.
+        self.details_pending = False
         self._logged = True
 
     @property
@@ -203,6 +228,9 @@ class CaptionSession:
         self.paced = True
         client = SonioxClient(
             source,
+            # Built from the details held in memory, not re-read from disk:
+            # the operator may have edited them seconds ago.
+            context=self.context(),
             on_state=self._on_engine_state,
             on_drop=self._on_engine_drop,
             on_audio_dropped=self._on_audio_dropped,
@@ -215,13 +243,56 @@ class CaptionSession:
             # also the only way to answer a token-level question after the
             # fact, and it produces a file that replays as a test fixture.
             stamp = time.strftime("%Y-%m-%d-%H%M%S")
+            # The config *without* its context. A capture is kept for months
+            # and may be committed as a fixture, and the context is where the
+            # speaker names live - writing it here would put them in a log
+            # file, which is exactly what the session details are kept out of.
+            # The shape is recorded instead, which is what a reader of the
+            # capture actually needs to know.
+            safe_config = {
+                key: value for key, value in client._config.items()
+                if key != "context"
+            }
+            safe_config["context"] = self.details.summary()
             self._capture = CaptureWriter(
                 LOG_DIR / f"live-{stamp}.jsonl",
-                meta={"source": source.describe(), "config": client._config},
+                meta={"source": source.describe(), "config": safe_config},
             )
         self._begin(mode=source.kind, engine="soniox", source=source.describe())
         self.state.set_status("connecting")
         self._task = asyncio.create_task(self._run_live(client), name="live")
+
+    def context(self) -> dict:
+        """The Soniox `context` for the next connection.
+
+        The public glossary is re-read each time, because it is a file anyone
+        may edit; the private details come from memory, because `/admin` owns
+        them.
+        """
+        return build_context(load_glossary(), self.details)
+
+    def save_details(self, details: SessionContext) -> bool:
+        """Persist and adopt new session details. True if a reconnect is
+        needed to apply them."""
+        save_session(details)
+        self.details = details
+        running = self._engine is not None and self.running
+        self.details_pending = running
+        return running
+
+    def apply_details(self) -> bool:
+        """Reconnect the engine so the new context takes effect.
+
+        Returns False when nothing is running - then there is nothing to
+        apply and the details are already in place for the next Start.
+        """
+        engine = self._engine
+        if engine is None or not self.running:
+            self.details_pending = False
+            return False
+        applied = engine.reconfigure(base_config(self.context()))
+        self.details_pending = not applied
+        return applied
 
     def _on_engine_state(self, state: str) -> None:
         """Mirror the engine's state onto the pages.
@@ -346,6 +417,12 @@ class CaptionSession:
             # lost *after* the talk, not only during it.
             "dropped_seconds": round(self.dropped_seconds, 1),
             "capture": str(self._capture.path) if self._capture else None,
+            # Counts, never values. The full details go out only from
+            # `/admin/session`, which is a separate request behind the same
+            # token - so nothing that merely polls status ever carries a
+            # speaker's name.
+            "details": self.details.summary(),
+            "details_pending": self.details_pending,
             "error": self.error,
             "elapsed": (
                 round(time.time() - self.started_at, 1)
@@ -517,6 +594,67 @@ async def asset(name: str) -> FileResponse:
 async def admin_status(token: str | None = Query(default=None)) -> JSONResponse:
     require_admin(token)
     return JSONResponse(session.status(), headers=NO_STORE)
+
+
+@app.get("/admin/session")
+async def admin_session(token: str | None = Query(default=None)) -> JSONResponse:
+    """This talk's details, in full.
+
+    **The only route that returns these values**, and it is behind the admin
+    token. Everything else - the audience pages, the viewer socket, the status
+    poll, every log - carries counts at most.
+    """
+    require_admin(token)
+    return JSONResponse(
+        {
+            "details": session.details.model_dump(),
+            "pending": session.details_pending,
+            "running": session.running,
+            # So the operator can see what the glossary already covers and
+            # not retype it. Public vocabulary, safe to show.
+            "glossary_terms": load_glossary().terms,
+        },
+        headers=NO_STORE,
+    )
+
+
+@app.post("/admin/session")
+async def admin_save_session(
+    token: str | None = Query(default=None),
+    details: SessionContext | None = None,
+) -> JSONResponse:
+    """Save this talk's details. Written atomically, adopted immediately.
+
+    Applied to a *running* engine only on request - see `/admin/session/apply`.
+    Reconnecting without being asked would be a surprise in the middle of a
+    talk, and the operator may want to type several fields before any of it
+    takes effect.
+    """
+    require_admin(token)
+    needs_apply = session.save_details(details or SessionContext())
+    return JSONResponse(
+        {"saved": True, "pending": needs_apply,
+         "details": session.details.model_dump()},
+        headers=NO_STORE,
+    )
+
+
+@app.post("/admin/session/apply")
+async def admin_apply_session(
+    token: str | None = Query(default=None),
+) -> JSONResponse:
+    """Reconnect the engine so saved details take effect mid-talk.
+
+    Uses the rollover path: the current stream ends gracefully, a new one
+    opens with the new context, and the ring buffer covers the join. No audio
+    is dropped and the audience sees no notice, because nothing went wrong.
+    """
+    require_admin(token)
+    applied = session.apply_details()
+    return JSONResponse(
+        {"applied": applied, "pending": session.details_pending},
+        headers=NO_STORE,
+    )
 
 
 @app.get("/admin/level")

@@ -1,6 +1,13 @@
 # secrets
 .env
 
+# Session details: speaker names, the talk title, the operator's notes. Not
+# public, and edited on the day from /admin - sometimes mid-session. The repo
+# is public, so the real file is local only and config/session.example.yaml
+# is the committed shape. Verified on 2026-10-13 that no version of this file
+# with real values has ever been committed.
+config/session.yaml
+
 # session artifacts (never committed, never served)
 logs/
 recordings/

@@ -1,4 +1,4 @@
-# Checkpoint — 2026-10-13 (end of day)
+# Checkpoint — 2026-10-13 (end of day, plus session context)
 
 **The plan changed.** Saturday Oct 17 is a **conversation with the Sabtiah
 organizer**, not a live demo. What it needs is a working demo on Hamza's
@@ -27,8 +27,10 @@ outage** and lost ~12.5 s of speech.
   words, and the stale error cleared. BUILD_SPEC acceptance 1 and 2 now pass
   live. It also produced the project's first raw token-level log.
 
-**Live testing is paused for the week.** Phases 0–5 done. Phase 6 (operator
-page, context, glossary) next.
+**Live testing is paused for the week.** Phases 0–5 done, and Phase 6's
+session context landed early because the details turned out to be **private
+and runtime-editable** — see below. The rest of Phase 6 (logging toggles,
+translation direction, clear captions) is next.
 
 ## Done
 
@@ -150,6 +152,35 @@ meter moves with speech; clipping is visible".
 - **Captions from a live mic** — the code path exists as of Phase 5 and is
   tested against a fake socket end to end. **It has never run against the real
   Soniox server.** That is the one outstanding item in the project.
+
+## Session details are private, and editable mid-talk
+
+Speaker names, titles and the operator's notes are not public; this repo is.
+`config/session.yaml` is now **gitignored**, with `config/session.example.yaml`
+as the committed shape.
+
+**History check, 2026-10-13: clean.** Every version of `config/session.yaml`
+ever committed (three commits: `43fef92`, `d8eca4c`, `a46a6de`) has
+`title: ""`, `speakers: []`, `companies: []`, `notes: ""` — only comments ever
+changed. Verified by reading each blob, not just the diffs. **No history
+rewrite is needed and none was done.**
+
+Where they may appear: the Soniox `context`, and `/admin` behind its token.
+Nowhere else — not the audience pages, the viewer socket, `/admin/status`,
+the usage ledger, a response log, a capture, or an error message. Those carry
+`SessionContext.summary()`, which is key names and counts.
+`tests/test_session_privacy.py` enforces it with strings that cannot occur by
+chance, and **it caught a real leak**: the raw response log was writing the
+whole Soniox config, context and all, into its meta line.
+
+Editing on `/admin`: title, speakers, companies, extra terms, notes. Save
+writes the file atomically (temp file + `os.replace`) and updates memory. With
+nothing running, the next Start uses it. With a session live, the page says
+*"Changes saved, not applied yet"* and offers **Apply now**, which reconnects
+through the **rollover path** — a graceful close, a new connection with the
+new context, the ring buffer covering the join. No audio dropped, no gap
+notice, no reconnect counted, `live` untouched. Extra terms merge with
+`config/glossary.yaml`, which stays in git because it is public vocabulary.
 
 ## The two fixes from the phone test
 

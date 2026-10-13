@@ -166,3 +166,82 @@ def test_the_page_still_names_no_engine():
     admin page specifically."""
     assert "SONIOX" not in ADMIN_JS.upper()
     assert "SONIOX" not in ADMIN_HTML.upper()
+
+
+# ---------------------------------------------------------------------------
+# The script has to be syntactically whole
+# ---------------------------------------------------------------------------
+
+
+def unterminated_string_lines(source: str) -> list[int]:
+    """Line numbers where a quoted literal is still open at end of line.
+
+    JavaScript has no multi-line single-quoted strings, so a quote left open
+    at a line end is always a broken file. There is no JavaScript runtime in
+    this project and `uv` brings none, so this is the cheapest check that
+    catches the whole class.
+
+    It exists because a literal newline once got written into a `.split()`
+    call while editing admin.js, which made the **entire script** fail to
+    parse. Every Python test still passed - they all read admin.js as text -
+    and the operator page was simply dead in the browser.
+    """
+    bad: list[int] = []
+    in_block_comment = False
+    for number, line in enumerate(source.splitlines(), 1):
+        stripped = line.strip()
+        if in_block_comment:
+            if "*/" in line:
+                in_block_comment = False
+            continue
+        if stripped.startswith("/*"):
+            if "*/" not in stripped:
+                in_block_comment = True
+            continue
+        if stripped.startswith(("*", "//")):
+            continue
+
+        quote = None
+        index = 0
+        while index < len(line):
+            char = line[index]
+            if quote is not None:
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+            elif char in "'\"":
+                quote = char
+            elif char == "/" and line[index + 1:index + 2] == "/":
+                break  # the rest of the line is a comment
+            index += 1
+        if quote is not None:
+            bad.append(number)
+    return bad
+
+
+@pytest.mark.parametrize("name", ["admin.js", "app.js", "screen.js"])
+def test_served_scripts_have_no_unterminated_string(name):
+    source = (WEB_DIR / name).read_text(encoding="utf-8")
+    bad = unterminated_string_lines(source)
+    assert not bad, (
+        f"{name} leaves a string open at line(s) {bad}; the whole file will "
+        f"fail to parse and the page will be dead in the browser"
+    )
+
+
+def test_the_unterminated_string_check_catches_what_it_claims_to():
+    """A guard is worth nothing until it fails on the thing it guards."""
+    broken = "var a = 'one';\nvar b = 'two\n';\n"
+    # Both lines: the literal opens on 2 and the orphaned closing quote on 3
+    # opens one of its own. That is what a newline pasted into a string looks
+    # like, and flagging both ends of it is the useful answer.
+    assert unterminated_string_lines(broken) == [2, 3]
+
+    assert unterminated_string_lines("var a = 'fine';\n") == []
+    assert unterminated_string_lines("var a = 'a\\'b';\n") == []
+    # An apostrophe inside double quotes, or in a comment, is not a bug.
+    assert unterminated_string_lines('var a = "it\'s fine";\n') == []
+    assert unterminated_string_lines("// don't trip on this\n") == []
+    assert unterminated_string_lines(" * don't trip on this either\n") == []

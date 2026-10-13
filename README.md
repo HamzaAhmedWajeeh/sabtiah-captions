@@ -120,6 +120,31 @@ backoff, re-sends up to 10 seconds of buffered audio, and if more than that
 was lost it writes `[connection interrupted]` into both streams rather than
 letting the captions silently skip. See `docs/resilience-test.md`.
 
+## Session details on the day
+
+Speaker names, the talk title, companies, notes, and any vocabulary specific
+to this talk go in the **This talk** box on `/admin`. One name per line.
+
+- **Save** writes them and uses them at the next **Start**.
+- If a session is already running, Save shows *"Changes saved, not applied
+  yet"* and an **Apply now** button. Apply now reconnects in the background:
+  the audience sees nothing, no audio is lost, and the captions carry on in
+  the same place. Use it when a speaker changes mid-session.
+- **Clear session details** empties everything.
+- Extra terms are added to the shared `config/glossary.yaml` vocabulary, not
+  instead of it. The page lists what the glossary already covers so you do
+  not retype it.
+
+**These stay on this laptop.** They are written to `config/session.yaml`,
+which is **gitignored** — speaker names are not public and this repository is.
+They go to exactly two places: the transcription API, where they are what
+makes names come out spelled right, and `/admin` behind its token. They never
+appear on the audience page, the big screen, the viewer socket, or any log;
+those carry counts at most, and `tests/test_session_privacy.py` checks it.
+
+`config/session.example.yaml` is the committed shape. A fresh clone has no
+`session.yaml` at all, which is fine — everything starts empty.
+
 ## Testing without spending anything
 
 Replay a saved capture through the whole pipeline — real captions, real
@@ -141,7 +166,7 @@ Render a capture as plain text, no server needed:
 uv run python tools/render_capture.py tests/fixtures/run1.jsonl --stats
 ```
 
-Run the tests — **all 353 are offline**, none touches the network:
+Run the tests — **all 393 are offline**, none touches the network:
 
 ```bash
 uv run pytest
@@ -157,8 +182,8 @@ uv run pytest
 - [ ] `config/glossary.yaml` has the talk's technical vocabulary. Terms listed
       there stay in English inside the Arabic captions — this is measured and
       it works.
-- [ ] `config/session.yaml` filled in with the **speaker names**. It is empty
-      by default, and names are where recognition fails.
+- [ ] **This talk** filled in on `/admin` with the **speaker names**. It is
+      empty by default, and names are where recognition fails.
 - [ ] Firewall rule added, and the audience URL **opened once on a phone**.
 - [ ] Check the spend on `/admin` before you start.
 

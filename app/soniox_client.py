@@ -288,6 +288,7 @@ class SonioxClient:
         self.responses = 0
         self.reconnects = 0
         self.rollovers = 0
+        self.reconfigures = 0
         self.keepalives = 0
         self.pauses = 0
         #: Audio actually put on the wire, re-sent ring audio included. This
@@ -308,6 +309,10 @@ class SonioxClient:
         #: a reconnect that never happened - and a storm of attempts produces
         #: one notice, not seven.
         self._pending_drop = 0.0
+        #: Set by `reconfigure()`. The sender ends the stream gracefully at
+        #: the next chunk and the run loop opens a new one with the new
+        #: config - the rollover path, for a different reason.
+        self._reconfigure = False
         self._conn_responses = 0
 
         self._ring: deque[tuple[int, bytes]] = deque()
@@ -330,6 +335,25 @@ class SonioxClient:
         self.state = state
         if self._on_state is not None:
             self._on_state(state)
+
+    def reconfigure(self, config: dict) -> bool:
+        """Swap the config and reconnect to apply it, losing no audio.
+
+        Soniox takes its `context` in the config frame, so a change to the
+        speaker list only reaches it on a new connection. That is the same
+        problem rollover already solves: end the current stream gracefully,
+        open another, and let the ring buffer cover the join. The audience
+        sees nothing - a planned reconnect is not a drop, so there is no gap
+        notice and `live` never changes.
+
+        Returns True if a reconnect was scheduled, False if nothing is
+        running and the new config will simply be used at the next Start.
+        """
+        self._config = config
+        if self.state not in (STREAMING, CONNECTING, RECONNECTING):
+            return False
+        self._reconfigure = True
+        return True
 
     @property
     def lag_seconds(self) -> float:
@@ -361,6 +385,7 @@ class SonioxClient:
             "engine_responses": self.responses,
             "reconnects": self.reconnects,
             "rollovers": self.rollovers,
+            "reconfigures": self.reconfigures,
             "keepalives": self.keepalives,
             "pauses": self.pauses,
             "streamed_seconds": round(self.audio_seconds_sent, 1),
@@ -546,6 +571,10 @@ class SonioxClient:
             if self._pause_requested:
                 await ws.send("")
                 return "paused"
+            if self._reconfigure:
+                self._reconfigure = False
+                await ws.send("")
+                return "reconfigure"
             if self._conn_sent_ms >= self.rollover_ms:
                 await ws.send("")
                 return "rollover"
@@ -640,8 +669,18 @@ class SonioxClient:
                 else:
                     if reason == "finished":
                         break
-                    if reason == "rollover":
-                        self.rollovers += 1
+                    if reason in ("rollover", "reconfigure"):
+                        # Planned, not a failure: no backoff, no reconnect
+                        # count, no `reconnecting` state, and nothing the
+                        # audience is told about. The boundary is still
+                        # marked, because the next stream's first token
+                        # carries no leading space of its own.
+                        if reason == "rollover":
+                            self.rollovers += 1
+                        else:
+                            self.reconfigures += 1
+                        if self._on_drop is not None:
+                            self._on_drop()
                         attempt = 0
                         continue
                     if reason == "paused":

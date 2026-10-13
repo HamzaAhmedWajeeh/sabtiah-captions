@@ -61,7 +61,18 @@
     spend: document.getElementById('s-spend'),
     free: document.getElementById('s-free'),
     runs: document.getElementById('s-runs'),
-    page: document.getElementById('page-problem')
+    page: document.getElementById('page-problem'),
+    dTitle: document.getElementById('d-title'),
+    dSpeakers: document.getElementById('d-speakers'),
+    dCompanies: document.getElementById('d-companies'),
+    dTerms: document.getElementById('d-terms'),
+    dNotes: document.getElementById('d-notes'),
+    dGlossary: document.getElementById('d-glossary'),
+    dSave: document.getElementById('d-save'),
+    dApply: document.getElementById('d-apply'),
+    dClear: document.getElementById('d-clear'),
+    dState: document.getElementById('d-state'),
+    details: document.getElementById('s-details')
   };
 
   var HINTS = {
@@ -219,6 +230,12 @@
         ? '—' : status.dropped_chunks + ' chunk(s)');
       text(els.recording, status.recording, 'off');
       text(els.responseLog, status.capture, 'off');
+      /* Counts only. The values are never in this payload. */
+      var d = status.details;
+      text(els.details, d ? (
+        (d.title ? 'title, ' : 'no title, ') + d.speakers + ' speaker(s), '
+        + d.companies + ' company(ies), ' + d.terms + ' extra term(s)'
+      ) : null);
     });
     section('engine', function () {
       text(els.engine, status.engine_state);
@@ -318,6 +335,104 @@
       .catch(function (error) { fail(String(error.message || error)); });
   }
 
+  /* -- this talk's details ---------------------------------------------
+   *
+   * Private. They are loaded once, by their own request, and never arrive
+   * with the status poll - so a page left open on a side screen shows counts
+   * and nothing else. Lists are one item per line, because a speaker name
+   * can contain a comma and an operator should not have to think about it.
+   */
+
+  function lines(value) {
+    return String(value || '').split('\n')
+      .map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length; });
+  }
+
+  function detailsState(message, kind) {
+    if (!els.dState) { return; }
+    els.dState.textContent = message || '';
+    els.dState.className = 'note' + (kind ? ' ' + kind : '');
+  }
+
+  function loadDetails() {
+    get('/admin/session')
+      .then(function (data) {
+        var d = data.details || {};
+        els.dTitle.value = d.title || '';
+        els.dSpeakers.value = (d.speakers || []).join('\n');
+        els.dCompanies.value = (d.companies || []).join('\n');
+        els.dTerms.value = (d.terms || []).join('\n');
+        els.dNotes.value = d.notes || '';
+        els.dGlossary.textContent = 'Already in the shared glossary: '
+          + (data.glossary_terms || []).join(', ');
+        showPending(data.pending);
+      })
+      .catch(function (error) { fail(String(error.message || error)); });
+  }
+
+  function showPending(pending) {
+    if (els.dApply) { els.dApply.hidden = !pending; }
+    if (pending) {
+      detailsState('Changes saved, not applied yet.', 'pending');
+    }
+  }
+
+  function sendDetails(details, note) {
+    return window.fetch(url('/admin/session'), {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(details)
+    })
+      .then(function (response) {
+        if (!response.ok) { throw new Error('status ' + response.status); }
+        return response.json();
+      })
+      .then(function (data) {
+        detailsState(note, 'saved');
+        showPending(data.pending);
+        return data;
+      })
+      .catch(function (error) { fail(String(error.message || error)); });
+  }
+
+  els.dSave.addEventListener('click', function () {
+    sendDetails({
+      title: els.dTitle.value.trim(),
+      speakers: lines(els.dSpeakers.value),
+      companies: lines(els.dCompanies.value),
+      terms: lines(els.dTerms.value),
+      notes: els.dNotes.value.trim()
+    }, 'Saved.');
+  });
+
+  els.dClear.addEventListener('click', function () {
+    els.dTitle.value = '';
+    els.dSpeakers.value = '';
+    els.dCompanies.value = '';
+    els.dTerms.value = '';
+    els.dNotes.value = '';
+    sendDetails({title: '', speakers: [], companies: [], terms: [], notes: ''},
+                'Cleared.');
+  });
+
+  els.dApply.addEventListener('click', function () {
+    window.fetch(url('/admin/session/apply'), {method: 'POST', cache: 'no-store'})
+      .then(function (response) {
+        if (!response.ok) { throw new Error('status ' + response.status); }
+        return response.json();
+      })
+      .then(function (data) {
+        showPending(data.pending);
+        detailsState(data.applied
+          ? 'Applied — reconnected with the new details.'
+          : 'Nothing running; they are already in place for the next Start.',
+          'saved');
+      })
+      .catch(function (error) { fail(String(error.message || error)); });
+  });
+
   els.source.addEventListener('change', showRows);
   els.refreshDevices.addEventListener('click', loadDevices);
 
@@ -352,6 +467,7 @@
   els.stop.addEventListener('click', function () { post('/admin/stop'); });
 
   showRows();
+  loadDetails();
   loadDevices();
   poll();
   window.setInterval(poll, POLL_MS);
