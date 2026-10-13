@@ -1,4 +1,15 @@
 # Shared across sessions. Fed into the Soniox `context` object on every connection.
+#
+# `terms` biases *recognition*: it helps the model hear the word at all.
+# `translation_terms` controls what happens to the word when it crosses into
+# the other language. A term that is not in `terms` cannot be preserved by
+# `translation_terms`, because it was never recognised in the first place -
+# `transformers` was missing from both on run6 (2026-10-13) and came back as
+# المحوّلات.
+#
+# Mapping a term to itself is how a word is kept in English inside the Arabic
+# captions. `Sabtiah` is the deliberate exception: it is a name the audience
+# reads in Arabic.
 terms:
   - RAG
   - MCP
@@ -10,10 +21,26 @@ terms:
   - agentic
   - embeddings
   - vector database
+  - transformers
+  - transformer
+  - ChatGPT
+  - AI
   - Sabtiah
   - Cycls
 
 translation_terms:
-  - {source: agent, target: agent}
+  # Keep the English word in the Arabic captions.
+  - {source: transformers, target: transformers}
+  - {source: transformer, target: transformer}
+  - {source: LLM, target: LLM}
+  - {source: LLMs, target: LLMs}
   - {source: RAG, target: RAG}
+  - {source: MCP, target: MCP}
+  - {source: agent, target: agent}
+  - {source: agents, target: agents}
+  - {source: fine-tuning, target: fine-tuning}
+  - {source: embeddings, target: embeddings}
+  - {source: ChatGPT, target: ChatGPT}
+  - {source: AI, target: AI}
+  # Not English: the meetup's own name is read in Arabic.
   - {source: Sabtiah, target: السبتية}

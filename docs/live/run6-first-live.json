@@ -1,0 +1,117 @@
+{
+  "type": "snapshot",
+  "seq": 215,
+  "live": false,
+  "status": "idle",
+  "streams": {
+    "ar": [
+      {
+        "id": 2,
+        "final": "مرحبًا، كيف حالك؟",
+        "partial": ""
+      },
+      {
+        "id": 4,
+        "final": "أنا حمزة.",
+        "partial": ""
+      },
+      {
+        "id": 6,
+        "final": "لنبدأ جلستنا اليوم.",
+        "partial": ""
+      },
+      {
+        "id": 8,
+        "final": "واليوم سنناقش، آه، الإيجابيات والسلبيات للذكاء الاصطناعي في عالمنا الحديث. السلام عليكم، كيف حال؟ أنا بخير، شكرًا.",
+        "partial": ""
+      },
+      {
+        "id": 10,
+        "final": "اليوم سنبدأ بالعربية الشامية، الدروس ووقتها.",
+        "partial": ""
+      },
+      {
+        "id": 12,
+        "final": "أننا نبدأ البحث عن المحوّلات السلام عليكم، اثنان آيست سيجنيچر، بارد كبير.",
+        "partial": ""
+      },
+      {
+        "id": 14,
+        "final": "على أي حال.",
+        "partial": ""
+      },
+      {
+        "id": 16,
+        "final": "ولنُكمل.",
+        "partial": ""
+      },
+      {
+        "id": 18,
+        "final": "وسنتحدث عن الشيء الجديد الذي نناقشه اليوم وأين نقف الآن. أين حين الله، محمد رسول الله.",
+        "partial": ""
+      },
+      {
+        "id": 20,
+        "final": "خلاص، شكرًا.",
+        "partial": ""
+      }
+    ],
+    "en": [
+      {
+        "id": 1,
+        "final": "Hey, hello, how are you?",
+        "partial": ""
+      },
+      {
+        "id": 3,
+        "final": "This is Hamza.",
+        "partial": ""
+      },
+      {
+        "id": 5,
+        "final": "Let's start our today's session.",
+        "partial": ""
+      },
+      {
+        "id": 7,
+        "final": "And today we'll discuss about, uh, the positives and negatives about AI in our modern world.",
+        "partial": ""
+      },
+      {
+        "id": 9,
+        "final": "Peace be upon you, how are you? I'm doing well, thank you. Today we'll start with Shoya Arabic, lessons and its time.",
+        "partial": ""
+      },
+      {
+        "id": 11,
+        "final": "That we begin researching about transformers",
+        "partial": ""
+      },
+      {
+        "id": 13,
+        "final": "Peace be upon you, two ICE signatures, a big cold. Anyways.",
+        "partial": ""
+      },
+      {
+        "id": 15,
+        "final": "And let's proceed.",
+        "partial": ""
+      },
+      {
+        "id": 17,
+        "final": "And we'll talk about what the new thing we are discussing today and where do we stand.",
+        "partial": ""
+      },
+      {
+        "id": 19,
+        "final": "Where is the time of God? Muhammad is the Messenger of God.",
+        "partial": ""
+      },
+      {
+        "id": 21,
+        "final": "Alright, thank you.",
+        "partial": ""
+      }
+    ]
+  }
+}
