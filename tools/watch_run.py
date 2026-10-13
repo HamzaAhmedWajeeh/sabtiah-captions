@@ -286,8 +286,7 @@ async def main_async(args) -> int:
                 lines.append(f"{index:3}. {text}")
         lines.append("")
     Path(args.out).with_suffix(".transcript.txt").write_text(
-        "
-".join(lines), encoding="utf-8")
+        "\n".join(lines), encoding="utf-8")
     report = summarise(rec, streams)
     print(report)
     Path(args.out).with_suffix(".txt").write_text(report, encoding="utf-8")

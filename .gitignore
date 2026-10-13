@@ -35,3 +35,5 @@ docs/captures/*.jsonl
 # act (git add -f).
 docs/live/*.jsonl
 docs/live/*.json
+docs/live/*.log
+docs/live/*.transcript.txt

@@ -245,3 +245,53 @@ def test_the_unterminated_string_check_catches_what_it_claims_to():
     assert unterminated_string_lines('var a = "it\'s fine";\n') == []
     assert unterminated_string_lines("// don't trip on this\n") == []
     assert unterminated_string_lines(" * don't trip on this either\n") == []
+
+
+# ---------------------------------------------------------------------------
+# Every Python file in the repo has to parse
+# ---------------------------------------------------------------------------
+
+
+def python_sources() -> list[Path]:
+    """Every .py file that is ours, excluding environments and caches."""
+    skip = {".venv", "__pycache__", ".pytest_cache", ".git", "node_modules"}
+    return sorted(
+        path for path in ROOT.rglob("*.py")
+        if not skip & set(path.parts)
+    )
+
+
+@pytest.mark.parametrize(
+    "path", python_sources(), ids=lambda p: str(p.relative_to(ROOT))
+)
+def test_every_python_file_parses(path):
+    """A file that does not compile is a file nobody ran.
+
+    `app/` and `tests/` are covered by simply being imported, but `tools/`
+    is not: nothing imports those, so a broken one sits in the repository
+    looking fine until the moment it is needed. `tools/watch_run.py` was
+    committed with a literal newline inside a string and was only discovered
+    when it was wanted to record a live run - the worst possible moment,
+    because the run was waiting on it.
+
+    Cheap enough to run over the whole tree on every suite.
+    """
+    import ast
+
+    source = path.read_text(encoding="utf-8")
+    try:
+        ast.parse(source, filename=str(path))
+    except SyntaxError as error:
+        pytest.fail(
+            f"{path.relative_to(ROOT)} does not parse: line {error.lineno}, "
+            f"{error.msg}"
+        )
+
+
+def test_the_parse_check_covers_the_tools():
+    """The directory that motivated it, named so the guard cannot quietly
+    stop covering it."""
+    names = {p.name for p in python_sources()}
+    for tool in ("watch_run.py", "dump_session.py", "list_devices.py",
+                 "render_capture.py", "probe_soniox.py"):
+        assert tool in names, f"{tool} is no longer being parse-checked"
