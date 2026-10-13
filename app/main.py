@@ -23,6 +23,7 @@ so the admin page can show total spend against the $10 budget.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import secrets
 import time
@@ -88,6 +89,10 @@ NO_STORE = {"Cache-Control": "no-store"}
 
 #: Nothing a read-only client legitimately sends is larger than this.
 MAX_CLIENT_MESSAGE = 200
+
+#: After the engine has flushed, how long to let the caption task drain the
+#: responses that flush produced. Short: the tokens are already in the queue.
+FINISH_DRAIN_SECONDS = 1.0
 
 
 class CaptionSession:
@@ -378,6 +383,21 @@ class CaptionSession:
         )
 
     async def stop(self) -> None:
+        # Ask the engine to flush before anything is cancelled. Soniox holds
+        # an open segment until it is told the audio ended, so cutting the
+        # socket here loses the last words of the talk - run9 stopped at
+        # "this is Hamza sig". Bounded, so a dead link cannot hang Stop.
+        engine = self._engine
+        if engine is not None and self.running:
+            await engine.finish()
+            if self._task is not None and not self._task.done():
+                # ...and give `_run_live` a moment to fold the tokens that
+                # flush produced into the captions before they are dropped.
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        asyncio.shield(self._task), FINISH_DRAIN_SECONDS
+                    )
+
         task, self._task = self._task, None
         if task is not None and not task.done():
             task.cancel()

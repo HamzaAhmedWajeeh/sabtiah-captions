@@ -42,12 +42,21 @@ MAX_VIEWERS = 500
 #: BUILD_SPEC: "at most 10 per second".
 BROADCAST_HZ = 10
 
-#: BUILD_SPEC: "Server sends a ping every 20 s." This is an application-level
-#: `{"type":"ping"}` rather than a WebSocket control frame: Starlette exposes
-#: no API for protocol pings, and an application ping is the more useful
-#: signal anyway - it proves the caption path is alive, not just the socket,
-#: and it stops the Cloudflare tunnel reaping an idle connection between talks.
-PING_INTERVAL = 20.0
+#: Heartbeat on the viewer socket. An application-level `{"type":"ping"}`
+#: rather than a WebSocket control frame: Starlette exposes no API for
+#: protocol pings, and an application ping is the more useful signal anyway -
+#: it proves the caption path is alive, not just the socket, and it stops the
+#: Cloudflare tunnel reaping an idle connection between talks.
+#:
+#: **BUILD_SPEC says 20 s; this is 5.** On run9 (2026-10-13) the laptop's
+#: Wi-Fi was switched off and the phone's socket died without either end
+#: sending a FIN, so the phone sat in `OPEN` believing it was connected and
+#: showed the same frozen line for the rest of the talk. The client now
+#: reconnects when it has heard nothing for 12 s, and that watchdog is only
+#: as good as the heartbeat feeding it: at 20 s the page would have to sit
+#: dead for most of a minute before noticing. Five seconds costs each phone
+#: about 20 bytes every five seconds.
+PING_INTERVAL = 5.0
 
 #: How long a viewer may fail to accept anything before it is dropped.
 STALL_TIMEOUT = 5.0

@@ -923,3 +923,131 @@ async def test_dropped_seconds_is_reported_to_the_operator():
     status = client.status()
     assert status["dropped_seconds"] > 0
     assert status["dropped_seconds"] == round(client.dropped_seconds, 1)
+
+
+# ---------------------------------------------------------------------------
+# Stop must not cut the last words off (run9, 2026-10-13)
+# ---------------------------------------------------------------------------
+#
+# run9's transcript ended "Okay, this is Hamza sig". Soniox holds an open
+# segment until it is told the audio has ended; `close()` cancelled the tasks
+# where they stood, so the frame that asks for a flush was never sent and the
+# tokens it would have produced were thrown away.
+
+
+class FlushesOnEnd(FakeServer):
+    """Holds a final sentence back until the stream is ended properly.
+
+    That is what the real engine does with an open segment: the words exist,
+    and they only arrive once it is told the audio stopped.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.flushed = False
+
+    async def on_audio(self, socket, chunk):
+        self.acked_ms[socket] = self.acked_ms.get(socket, 0) + CHUNK_MS
+        socket.reply({
+            "tokens": [{
+                "text": " word", "is_final": True, "language": "en",
+                "translation_status": "original",
+            }],
+            "final_audio_proc_ms": self.acked_ms[socket],
+        })
+
+    async def on_end(self, socket):
+        self.flushed = True
+        socket.reply({
+            "tokens": [{
+                "text": " LASTWORDS", "is_final": True, "language": "en",
+                "translation_status": "original",
+            }],
+            "final_audio_proc_ms": self.acked_ms.get(socket, 0),
+        })
+        socket.reply({"tokens": [], "finished": True})
+
+
+async def test_finish_asks_the_engine_to_flush_and_waits():
+    server = FlushesOnEnd()
+    client = SonioxClient(audio_stream([tone_chunk()] * 200, hold=True),
+                          api_key=KEY, connect=server)
+    got = []
+
+    async def pump():
+        async for response in client:
+            got.append(response)
+
+    task = asyncio.create_task(pump())
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if len(got) >= 3:
+            break
+
+    assert await client.finish() is True, "the stream did not end cleanly"
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        await task
+    await client.close()
+
+    assert server.flushed, "the engine was never told the audio ended"
+    assert server.sockets[-1].closed_gracefully
+    text = "".join(
+        token["text"]
+        for response in got for token in response.get("tokens", [])
+    )
+    assert "LASTWORDS" in text, f"the flushed tokens never arrived: {text!r}"
+
+
+async def test_finish_is_bounded_when_the_engine_never_answers():
+    """A dead link must not make Stop hang."""
+
+    class NeverFinishes(FakeServer):
+        async def on_end(self, socket):
+            pass  # swallow it: no flush, no `finished`
+
+    server = NeverFinishes()
+    client = SonioxClient(audio_stream([tone_chunk()] * 200, hold=True),
+                          api_key=KEY, connect=server)
+    task = asyncio.create_task(collect(client, timeout=10))
+    await asyncio.sleep(0.2)
+
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    ended = await client.finish(timeout=0.3)
+    elapsed = loop.time() - start
+
+    assert ended is False
+    assert elapsed < 2.0, f"finish() blocked for {elapsed:.1f} s"
+    await client.close()
+    task.cancel()
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        await task
+
+
+async def test_finish_on_a_client_that_never_started_is_harmless():
+    server = FakeServer()
+    client = SonioxClient(audio_stream([]), api_key=KEY, connect=server)
+    assert await client.finish() is False
+    await client.close()
+
+
+async def test_finish_does_not_reconnect_afterwards():
+    """Ending the stream on purpose is not a drop."""
+    server = FlushesOnEnd()
+    client = SonioxClient(audio_stream([tone_chunk()] * 200, hold=True),
+                          api_key=KEY, connect=server)
+    task = asyncio.create_task(collect(client, timeout=10))
+    await asyncio.sleep(0.2)
+    await client.finish()
+    await asyncio.sleep(0.2)
+    connections = server.connections
+    await asyncio.sleep(0.2)
+
+    assert server.connections == connections, "it reconnected after finishing"
+    assert client.reconnects == 0
+    await client.close()
+    task.cancel()
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        await task

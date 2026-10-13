@@ -145,6 +145,14 @@ ROLLOVER_MS = 280 * 60 * 1000
 IDLE_STOP_SECONDS = 600.0
 SILENCE_RMS = 0.002
 
+#: How long Stop waits for Soniox to flush what it is holding. The engine
+#: finalises an open segment when it is told the audio has ended, and those
+#: tokens are the last words of the talk - on run9 the transcript ended
+#: "this is Hamza sig" because the connection was cut while they were still
+#: in flight. Two seconds is long enough for a flush on a working link and
+#: short enough that an operator pressing Stop does not wonder if it worked.
+FINISH_TIMEOUT = 2.0
+
 #: How long a connection must carry responses before it counts as healthy and
 #: the backoff resets. Without this, a connection that dies immediately after
 #: its first response would keep restarting the schedule at 0.5 s for ever.
@@ -746,6 +754,37 @@ class SonioxClient:
                     return
         finally:
             await self.close()
+
+    async def finish(self, timeout: float = FINISH_TIMEOUT) -> bool:
+        """End the stream gracefully and wait for the last tokens.
+
+        `close()` cancels everything where it stands, which is right when
+        something has gone wrong and wrong when the operator simply pressed
+        Stop: Soniox holds an open segment until it is told the audio ended,
+        and cutting the socket throws those words away.
+
+        This pushes the same end-of-audio sentinel the pump uses when a file
+        runs out, so the sender sends the empty text frame, Soniox flushes,
+        and the run loop finishes on its own. Bounded, because a dead link
+        must not make Stop hang.
+
+        Returns True if the stream ended cleanly within `timeout`.
+        """
+        task = self._run_task
+        if task is None or task.done():
+            return False
+        self._closing = True            # no reconnect after this point
+        self._sound.set()               # release a paused wait
+        queue = self._send_queue
+        if queue is not None:
+            queue.put_nowait(None)
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout)
+            return True
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            return False
+        except Exception:
+            return False
 
     async def close(self) -> None:
         """Stop everything. Safe to call twice, and from a `finally`."""

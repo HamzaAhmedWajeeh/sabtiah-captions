@@ -6,15 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Phases 0–5 are done, and Phase 6's session context is done early. The rest of Phase 6 (logging toggles, translation direction, clear-captions) is next.**
 
-**Three live runs have happened** (run6, run7, run8 on 2026-10-13; write-ups in `docs/live/`). Acceptance checks 1 and 2 in `docs/resilience-test.md` now pass live; 3 and 4 are still unrun. Live runs up to 60 minutes no longer need asking — see the budget section.
+**Four live runs have happened** (run6-run9 on 2026-10-13; write-ups in `docs/live/`). Acceptance checks 1 and 2 in `docs/resilience-test.md` now pass live; 3 and 4 are still unrun. Live runs up to 60 minutes no longer need asking — see the budget section.
 
 - **Phase 1 is answered**, with five captures in `docs/captures/` and the findings in `docs/soniox-notes.md`. Read that file before touching caption logic — several of its measurements contradict assumptions in BUILD_SPEC section 3 and section 6.
 - **Phase 2** is `app/captions.py` (pure, Option B) plus `app/replay.py`, the fake Soniox client. It paces a capture at real time, so the pages can be judged at true speed.
 - **Phase 3** is `app/broadcast.py` (viewer hub), `app/main.py` (routes, `/ws`, the replay session) and the three pages in `web/`.
 - **Phase 4** is `app/audio_source.py` (`MicSource`, `FileSource`), `tools/list_devices.py`, the admin level meter and `app/usage.py` (the `logs/usage.jsonl` spend ledger).
+- **The audience page recovers on its own.** The server heartbeats the viewer socket every 5 s and the page reconnects after 12 s of silence, plus on `online` and on becoming visible. run9 found the phone frozen on a dead socket that never fired `onclose` - a dead socket is indistinguishable from a quiet one, so silence is the only signal there is. Do not raise `PING_INTERVAL` without lowering the page's `SILENCE_LIMIT` with it; a test asserts the relationship.
+- **Stop flushes before it closes.** `SonioxClient.finish()` sends the end-of-audio frame and waits up to 2 s for the last tokens. Cancelling the tasks outright loses the end of the talk, which is how run9 ended "this is Hamza sig".
 - **Phase 5** is `app/soniox_client.py`: ring buffer, backoff, error classification, keepalive, rollover, idle auto-stop. It takes its `connect` as an argument and imports `websockets` lazily, so no test can reach Soniox even by accident. Keep it that way.
-- **Session context (Phase 6, early)** is editable from `/admin` at runtime: save writes `config/session.yaml` atomically, and "Apply now" reconnects through the rollover path so a mid-talk change costs no audio and shows the audience nothing. **426 tests, all offline.**
-- **`docs/CHECKPOINT.md` is the short version**: what is done, what is next, the open items, and Soniox audio spent (**27.7 minutes** so far, about 8 cents of the $10 — see the budget section).
+- **Session context (Phase 6, early)** is editable from `/admin` at runtime: save writes `config/session.yaml` atomically, and "Apply now" reconnects through the rollover path so a mid-talk change costs no audio and shows the audience nothing. **469 tests, all offline.**
+- **`docs/CHECKPOINT.md` is the short version**: what is done, what is next, the open items, and Soniox audio spent (**31.2 minutes** so far, about 9 cents of the $10 — see the budget section).
 - Two findings matter most for the phases ahead. **Endpoint detection can effectively never fire** — `run4-saudi` gave one `<end>` in 300 s — so `<end>` is not a reliable paragraph break and `captions.py` adds a soft size break. And **nothing stays in Latin script in Arabic captions**: `RAG`/`MCP`/`LLM` get transliterated in the `en`→`ar` direction. The `translation_terms` fix in `config/glossary.yaml` is untested and is the highest-value remaining experiment.
 
 ## BUILD_SPEC.md is the contract
@@ -106,8 +108,8 @@ two-way translation — $2 per million audio tokens and $4 per million text
 tokens, at roughly 30k of each per hour. That is **$0.003 a minute**, so the
 $10 covers about **55 hours** of streaming.
 
-For scale: everything this project has streamed to date is 27.7 minutes, which
-cost **about 8 cents**. The earlier rules in this file were written before the
+For scale: everything this project has streamed to date is 31.2 minutes, which
+cost **about 9 cents**. The earlier rules in this file were written before the
 rate was known and assumed the budget was tight. It is not.
 
 - **Replay is still the default for development.** Caption logic, UI,

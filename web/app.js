@@ -32,6 +32,13 @@
   var LANGS = ['en', 'ar'];
   var STORE = 'sabtiah.';
 
+  /* The server heartbeats every 5 s. Hearing nothing for this long means the
+   * connection is gone, whatever the socket says about itself. Two missed
+   * heartbeats plus room for a slow phone. */
+  var SILENCE_LIMIT = 12000;
+  /* How often to check. Cheap, and the resolution the limit deserves. */
+  var WATCHDOG_MS = 2000;
+
   /* localStorage throws in Safari private mode rather than returning null,
    * and a thrown exception here would take the captions down with it. */
   function load(key) {
@@ -56,6 +63,9 @@
     var attempt = 0;
     var timer = null;
     var stopped = false;
+    /* When anything last arrived from the server, caption or heartbeat. */
+    var heardAt = 0;
+    var watchdog = null;
 
     function socketUrl() {
       var scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -92,6 +102,9 @@
       var message;
       try { message = JSON.parse(raw); } catch (e) { return; }
       if (!message || typeof message !== 'object') { return; }
+
+      /* Any message at all is proof of life, the heartbeat included. */
+      heardAt = Date.now();
 
       if (message.type === 'ping') { return; }
 
@@ -134,6 +147,46 @@
       timer = window.setTimeout(function () { timer = null; connect(); }, delay);
     }
 
+    /* **Why this exists.** On run9 the laptop's Wi-Fi was switched off and
+     * the phone's socket died without either end sending a FIN. The phone sat
+     * in `OPEN` believing it was connected, `onclose` never fired, and the
+     * page showed the same frozen line for the rest of the talk while the
+     * laptop - on loopback, which never went away - carried on fine.
+     *
+     * A dead socket is indistinguishable from a quiet one, so silence is the
+     * only signal available: the server heartbeats every 5 s, and hearing
+     * nothing for `SILENCE_LIMIT` means the connection is gone whatever the
+     * socket claims. Closing it by hand is what produces the `onclose` the
+     * reconnect path is waiting for. */
+    function checkAlive() {
+      if (stopped || !socket || socket.readyState !== 1) { return; }
+      if (Date.now() - heardAt < SILENCE_LIMIT) { return; }
+      setStatus('reconnecting');
+      try { socket.close(); } catch (e) { /* already gone */ }
+      /* Some browsers will not fire `onclose` for a socket whose network has
+       * vanished. Drop the reference and reconnect regardless. */
+      socket = null;
+      retry();
+    }
+
+    /* A phone coming back - the radio returning, or the screen waking - is
+     * better evidence than any timer, so take the shortcut when it arrives. */
+    function wakeUp() {
+      if (stopped) { return; }
+      if (socket && socket.readyState === 1
+          && Date.now() - heardAt < SILENCE_LIMIT) {
+        return;                       // still healthy, nothing to do
+      }
+      if (socket) {
+        try { socket.close(); } catch (e) { /* already gone */ }
+        socket = null;
+      }
+      if (timer) { window.clearTimeout(timer); timer = null; }
+      attempt = 0;                    // it just came back; do not wait 15 s
+      setStatus('reconnecting');
+      connect();
+    }
+
     function connect() {
       if (stopped) { return; }
       setStatus(seq === 0 ? 'connecting' : 'reconnecting');
@@ -148,8 +201,10 @@
 
       next.onopen = function () {
         attempt = 0;
+        heardAt = Date.now();
         // The server opens with a full snapshot, so there is nothing to ask
-        // for here: reconnecting is itself the resync.
+        // for here: reconnecting is itself the resync, and it brings the page
+        // up to the captions as they are now rather than where it left off.
       };
       next.onmessage = function (event) { handle(event.data); };
       next.onclose = function () {
@@ -161,25 +216,31 @@
     }
 
     /* A locked phone suspends the socket and the close event may only arrive
-     * when the screen comes back. Reconnect at once rather than waiting out a
-     * backoff the user cannot see. */
+     * when the screen comes back - if it arrives at all. The old version of
+     * this handler returned early whenever `readyState <= 1`, which is
+     * precisely the frozen-but-OPEN socket run9 was stuck on, so it never
+     * helped. `wakeUp` judges by silence instead. */
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState !== 'visible' || stopped) { return; }
-      if (socket && socket.readyState <= 1) { return; }
-      if (timer) { window.clearTimeout(timer); timer = null; }
-      attempt = 0;
-      connect();
+      if (document.visibilityState === 'visible') { wakeUp(); }
     });
+    /* The radio coming back. Not every browser fires it, and it is not
+     * trusted on its own - the watchdog still runs - but when it does arrive
+     * it is the earliest possible signal. */
+    window.addEventListener('online', wakeUp);
 
+    watchdog = window.setInterval(checkAlive, WATCHDOG_MS);
     connect();
 
     return {
       resync: function () { request({ type: 'resync' }); },
       status: function () { return status; },
       isLive: function () { return live; },
+      /* For tests: how long since anything was heard from the server. */
+      silentFor: function () { return Date.now() - heardAt; },
       stop: function () {
         stopped = true;
         if (timer) { window.clearTimeout(timer); timer = null; }
+        if (watchdog) { window.clearInterval(watchdog); watchdog = null; }
         if (socket) { try { socket.close(); } catch (e) { /* already gone */ } }
       }
     };

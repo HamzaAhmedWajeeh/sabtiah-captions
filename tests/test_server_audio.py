@@ -669,3 +669,70 @@ async def test_no_capture_is_written_unless_asked(
     assert not (tmp_path / "logs").exists() or not list(
         (tmp_path / "logs").glob("live-*.jsonl")
     )
+
+
+async def test_stop_keeps_the_last_words(
+    fresh_session, recordings, monkeypatch
+):
+    """run9 ended "this is Hamza sig". Stop now flushes first.
+
+    The fake holds a final sentence back until the stream is ended properly,
+    which is what the engine does with an open segment.
+    """
+    from test_soniox_client import FlushesOnEnd
+
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    server = FlushesOnEnd()
+    source = FileSource(recordings / "tone.wav", realtime=True)
+
+    await fresh_session.start_live(source, connect=server, api_key="test-key")
+    for _ in range(300):
+        await asyncio.sleep(0.01)
+        if fresh_session.responses >= 2:
+            break
+
+    await admin_stop(token=TOKEN)
+
+    assert server.flushed, "Stop did not ask the engine to flush"
+    text = fresh_session.state.render("en")
+    assert "LASTWORDS" in text, (
+        f"the last words were cut off again: {text!r}"
+    )
+    assert fresh_session.running is False
+    assert fresh_session.state.live is False
+
+
+async def test_stop_is_prompt_when_the_engine_will_not_flush(
+    fresh_session, recordings, monkeypatch
+):
+    """An operator pressing Stop must not be left waiting on a dead link."""
+    from test_soniox_client import FakeServer
+
+    class NeverFinishes(FakeServer):
+        async def on_end(self, socket):
+            pass
+
+    monkeypatch.setattr(settings, "soniox_api_key", "test-key")
+    source = FileSource(recordings / "tone.wav", realtime=True)
+    await fresh_session.start_live(source, connect=NeverFinishes(),
+                                   api_key="test-key")
+    await asyncio.sleep(0.1)
+
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await admin_stop(token=TOKEN)
+    elapsed = loop.time() - start
+
+    assert fresh_session.running is False
+    assert elapsed < 6.0, f"Stop took {elapsed:.1f} s"
+
+
+async def test_stopping_a_replay_is_unaffected(fresh_session):
+    """There is no engine to flush, and Stop must stay immediate."""
+    await admin_start(token=TOKEN, capture="run5-english.jsonl", paced=True)
+    await asyncio.sleep(0.05)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await admin_stop(token=TOKEN)
+    assert loop.time() - start < 1.0
+    assert fresh_session.running is False

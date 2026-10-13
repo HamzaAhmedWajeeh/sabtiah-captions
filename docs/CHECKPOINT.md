@@ -1,4 +1,4 @@
-# Checkpoint — 2026-10-13 (end of day, plus session context)
+# Checkpoint — 2026-10-13 (end of day, after run9)
 
 **The plan changed.** Saturday Oct 17 is a **conversation with the Sabtiah
 organizer**, not a live demo. What it needs is a working demo on Hamza's
@@ -22,6 +22,12 @@ convincingly over Wi-Fi, which it does today off a replay.
 run7 also broke, usefully: a deliberate 10 s Wi-Fi drop became a **32.5 s
 outage** and lost ~12.5 s of speech.
 
+- **run9** (3.51 min) found the one bug the laptop could not see: on an
+  internet drop the **phone froze and never recovered**, while the laptop
+  page handled it fine. A dead socket looks exactly like a quiet one, so
+  nothing ever timed out. Fixed with a 5 s server heartbeat and a 12 s
+  client watchdog, plus reconnects on `online` and on waking. It also
+  cut the last words at Stop. Both fixed; write-up in `docs/live/run9.md`.
 - **run8** (1.73 min) confirmed the fixes on the phone: `[connection
   interrupted]` in both streams, captions back **live** with no lag, no glued
   words, and the stale error cleared. BUILD_SPEC acceptance 1 and 2 now pass
@@ -55,9 +61,10 @@ Phase 5 and the caption fix. No test touches the network: `SonioxClient` takes
 its `connect` as an argument and imports `websockets` lazily, so no test can
 dial Soniox even by accident.
 
-## Soniox spent: 27.7 minutes, about 8 cents
+## Soniox spent: 31.2 minutes, about 9 cents
 
-22.0 from Phase 1, **1.36 from run6**, **2.88 from run7**, **1.48 from run8**.
+22.0 from Phase 1, **1.36 from run6**, **2.88 from run7**, **1.48 from run8**,
+**3.51 from run9**.
 The ledger in `logs/usage.jsonl` is the record; `/admin` shows the running
 total.
 
@@ -376,16 +383,23 @@ whatever the venue turns out to need.
 
 ## Open items
 
-1. **A short live re-run is owed**, to confirm the run7 fixes: the ring now
+1. **Saudi dialect is still unmeasured after four live runs.** Every Arabic
+   clip used so far has been Levantine (`شو`, `بحكي`, `بلش`). The audience is
+   Saudi. This is the oldest open item that costs nothing to close: 30 seconds
+   of casual Saudi speech.
+2. **Apply now has never been exercised live.** It is tested against a fake
+   and reconnects through the rollover path; nobody has changed a speaker
+   name mid-talk for real.
+3. **A short live re-run is owed**, to confirm the run7 fixes: the ring now
    covers a real outage, the join reads `behind ChatGPT` rather than
    `behindChatGPT`, `dropped_seconds` stays 0, and the error clears after
    recovery. Also the two unsettled terms (`agents`, `agent`, `ChatGPT`).
    Checklist in `docs/resilience-test.md`.
-2. ~~**A replay leaves the captions behind**~~ — **decided and confirmed.**
+4. ~~**A replay leaves the captions behind**~~ — **decided and confirmed.**
    At most 10 s is replayed; a longer outage drops its oldest audio and says
    so in both streams. Seen working on run8: a 27.3 s outage, 18.6 s dropped
    and announced, captions back live.
-3. ~~**`translation_terms` is untested**~~ and ~~**the terms clip is
+5. ~~**`translation_terms` is untested**~~ and ~~**the terms clip is
    owed**~~ — **both closed by run7.** The experiment was done with live
    speech instead of a recording: Hamza said the terms into the microphone,
    which is what the clip was only ever a substitute for. `transformers`
@@ -398,15 +412,15 @@ whatever the venue turns out to need.
    do not obey it are `agents` and `AI`, and they are open item 1, not this
    one.
 
-4. ~~**The per-minute rate is not recorded anywhere**~~ — **answered
+6. ~~**The per-minute rate is not recorded anywhere**~~ — **answered
    2026-10-13**: $0.18/hour, $0.003/minute, from soniox.com/pricing. Put
    `SONIOX_RATE_PER_MINUTE=0.003` in `.env` to turn the dollar figures on;
    it is in `.env.example` with the source beside it. The budget rules above
    and in CLAUDE.md are rewritten around it.
-5. **Acceptance 3 and 4 are still unrun.** The invalid-key check needs one
+7. **Acceptance 3 and 4 are still unrun.** The invalid-key check needs one
    short live start; the 60-minute soak needs no credit at all and has not
    been done.
-6. **The headset microphone reads silence through its own device entry.**
+8. **The headset microphone reads silence through its own device entry.**
    run6 and run7 both worked through `Microsoft Sound Mapper` (device 0), so
    this is no longer blocking - but Hamza asked for live tests on the
    headset rather than the laptop array. It is device **17** (`Microphone
@@ -417,29 +431,29 @@ whatever the venue turns out to need.
    permissions are fine. The headset is not connected, not powered, or muted.
    Plug it in and re-run `uv run python tools/list_devices.py --listen 5
    --device 17` before the live test.
-7. **`agents`/`agent` is a known limitation, accepted.** Both are in
+9. **`agents`/`agent` is a known limitation, accepted.** Both are in
    `translation_terms` and both get translated. run8 settled the shape of it:
    singular `agent` became `الوكيل`, which is *correct*, where run7's plural
    became `أجهزة` ("devices"), which is not. A settled Arabic equivalent beats
    `translation_terms`; whether that hurts depends on the sense the model
    picks.
-8. **One Arabic phrase landed in the English stream on run7** and has never
+10. **One Arabic phrase landed in the English stream on run7** and has never
    recurred. run8 had the raw log and the same conditions - a mid-run language
    switch, 723 Arabic original tokens - and leaked nothing. Not systematic;
    reasoning in `docs/soniox-notes.md`.
-9. **Saudi dialect is still unmeasured.** `recordings/saudi-5min.m4a` is MSA
+11. ~~**Saudi dialect**~~ — see item 1. `recordings/saudi-5min.m4a` is MSA
    news register about Yemen with zero distinctively Saudi lexis. Needs
    casual Saudi conversation. The audience is Saudi; the only dialect
    measured is Egyptian.
-10. **Long sessions untested against the real server.** The rollover, the
+12. **Long sessions untested against the real server.** The rollover, the
    keepalive and the idle auto-stop all have tests, but none has run for real.
    The 60-minute `FileSource` soak in BUILD_SPEC's acceptance 4 needs no
    credit and has not been done.
-11. **`config/session.yaml` is empty.** Filling `speakers` would likely fix
+13. **`config/session.yaml` is empty.** Filling `speakers` would likely fix
    `جودت` → "Goudat" in run1. Cheap win, no API cost.
-12. **Three phones at once, and the other mobile browser, untested.** One
+14. **Three phones at once, and the other mobile browser, untested.** One
    phone works. The spec wants iOS Safari and Android Chrome at 360 px.
-13. **The venue USB interface has never been plugged in.** `MicSource` takes
+15. **The venue USB interface has never been plugged in.** `MicSource` takes
    `--channel` and resamples, which is what a multi-channel interface needs,
    but every live check so far has been the laptop's built-in array.
 
