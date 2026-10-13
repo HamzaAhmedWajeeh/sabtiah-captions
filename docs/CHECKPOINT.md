@@ -1,4 +1,4 @@
-# Checkpoint — 2026-10-13 (late)
+# Checkpoint — 2026-10-13 (end of day)
 
 **The plan changed.** Saturday Oct 17 is a **conversation with the Sabtiah
 organizer**, not a live demo. What it needs is a working demo on Hamza's
@@ -20,10 +20,15 @@ convincingly over Wi-Fi, which it does today off a replay.
   answered in `docs/soniox-notes.md`.
 
 run7 also broke, usefully: a deliberate 10 s Wi-Fi drop became a **32.5 s
-outage** and lost ~12.5 s of speech. Both bugs are fixed and tested; details
-in `docs/resilience-test.md`. **A short re-run is needed to confirm the fix.**
+outage** and lost ~12.5 s of speech.
 
-Phases 0–5 done. Phase 6 (operator page, context, glossary) next.
+- **run8** (1.73 min) confirmed the fixes on the phone: `[connection
+  interrupted]` in both streams, captions back **live** with no lag, no glued
+  words, and the stale error cleared. BUILD_SPEC acceptance 1 and 2 now pass
+  live. It also produced the project's first raw token-level log.
+
+**Live testing is paused for the week.** Phases 0–5 done. Phase 6 (operator
+page, context, glossary) next.
 
 ## Done
 
@@ -48,9 +53,9 @@ Phase 5 and the caption fix. No test touches the network: `SonioxClient` takes
 its `connect` as an argument and imports `websockets` lazily, so no test can
 dial Soniox even by accident.
 
-## Soniox audio spent: 26.2 minutes
+## Soniox audio spent: 27.7 minutes
 
-22.0 from Phase 1, **1.36 from run6**, **2.88 from run7**. The ledger in
+22.0 from Phase 1, **1.36 from run6**, **2.88 from run7**, **1.48 from run8**. The ledger in
 `logs/usage.jsonl` is the record; `/admin` shows the running total. Still no
 dollar figure, because the per-minute rate has never been written down (open
 item 2).
@@ -311,12 +316,10 @@ and three phones at once.
    `behindChatGPT`, `dropped_seconds` stays 0, and the error clears after
    recovery. Also the two unsettled terms (`agents`, `agent`, `ChatGPT`).
    Checklist in `docs/resilience-test.md`.
-2. ~~**A replay leaves the captions behind**~~ — **decided 2026-10-13:
-   prefer staying live.** At most 10 s is replayed after a reconnect; a longer
-   outage drops its oldest audio and says so with a
-   `[connection interrupted]` / `[انقطع الاتصال]` paragraph in both streams.
-   The ring is back to 20 s. Details in `docs/resilience-test.md`. **Not yet
-   seen on a real run.**
+2. ~~**A replay leaves the captions behind**~~ — **decided and confirmed.**
+   At most 10 s is replayed; a longer outage drops its oldest audio and says
+   so in both streams. Seen working on run8: a 27.3 s outage, 18.6 s dropped
+   and announced, captions back live.
 3. ~~**`translation_terms` is untested**~~ and ~~**the terms clip is
    owed**~~ — **both closed by run7.** The experiment was done with live
    speech instead of a recording: Hamza said the terms into the microphone,
@@ -349,16 +352,16 @@ and three phones at once.
    permissions are fine. The headset is not connected, not powered, or muted.
    Plug it in and re-run `uv run python tools/list_devices.py --listen 5
    --device 17` before the live test.
-7. **`agents` is a known limitation, accepted.** It is in
-   `translation_terms` and was translated anyway, to `أجهزة` ("devices"). The
-   next run tests the singular `agent`. If that fails too the options are to
-   live with it or to map `agents` to a chosen Arabic word rather than letting
-   the model pick.
-8. **One Arabic phrase landed in the English stream on run7**, and it cannot
-   be explained from the data: a live run kept no token-level record. The
-   reasoning, and why it is almost certainly Soniox's labelling rather than a
-   routing bug, is in `docs/soniox-notes.md`. `/admin` can now log raw
-   responses, which turns this into a one-line grep after the next run.
+7. **`agents`/`agent` is a known limitation, accepted.** Both are in
+   `translation_terms` and both get translated. run8 settled the shape of it:
+   singular `agent` became `الوكيل`, which is *correct*, where run7's plural
+   became `أجهزة` ("devices"), which is not. A settled Arabic equivalent beats
+   `translation_terms`; whether that hurts depends on the sense the model
+   picks.
+8. **One Arabic phrase landed in the English stream on run7** and has never
+   recurred. run8 had the raw log and the same conditions - a mid-run language
+   switch, 723 Arabic original tokens - and leaked nothing. Not systematic;
+   reasoning in `docs/soniox-notes.md`.
 9. **Saudi dialect is still unmeasured.** `recordings/saudi-5min.m4a` is MSA
    news register about Yemen with zero distinctively Saudi lexis. Needs
    casual Saudi conversation. The audience is Saudi; the only dialect

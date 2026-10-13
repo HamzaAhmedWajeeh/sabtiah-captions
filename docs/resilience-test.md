@@ -8,14 +8,14 @@ credit and a stopwatch, and $10 has to cover the demo, so each is split in two:
 2. **The live confirmation** only has to show that the real server behaves
    like the fake. It is cheap, short, and listed below as outstanding.
 
-Status: **offline half done. Live half run once, on run7, and it found two
-bugs.** See the run7 section below - the headline is that a 10 s Wi-Fi drop
-produced a 32.5 s outage, which a 20 s ring cannot cover.
+Status: **acceptance 1 and 2 pass live as of run8 (2026-10-13).** run7 found
+two bugs, run8 confirmed the fixes. Acceptance 3 (invalid key) and 4 (the
+60-minute soak) are still unrun; 4 needs no credit.
 
 | # | BUILD_SPEC acceptance | Offline | Live |
 | --- | --- | --- | --- |
-| 1 | Wi-Fi off 10 s mid-sentence, back on: captions resume, the sentence spoken during the drop appears | ✅ `test_a_ring_that_outlives_the_outage_loses_nothing` | ❌ **FAILED on run7**, fixed, **needs a re-run** |
-| 2 | Network dead 2 min: admin shows reconnecting, pages show an indicator, recovery is automatic | ✅ `test_a_long_outage_backs_off_and_keeps_trying`, `test_the_engine_state_reaches_the_pages_without_clearing_live` | ⚠️ passed on run7 for a 32.5 s outage, not 2 min; stale-error flaw fixed |
+| 1 | Wi-Fi off 10 s mid-sentence, back on: captions resume, the sentence spoken during the drop appears | ✅ `test_a_drop_inside_the_replay_window_still_loses_nothing` | ✅ **run8**, under the revised policy: captions resume *live*, the gap is announced rather than replayed |
+| 2 | Network dead 2 min: admin shows reconnecting, pages show an indicator, recovery is automatic | ✅ `test_a_long_outage_backs_off_and_keeps_trying`, `test_the_engine_state_reaches_the_pages_without_clearing_live` | ✅ **run8** for a 27.3 s outage; 2 minutes still untested |
 | 3 | Invalid API key: admin shows a clear error, no retry loop | ✅ `test_a_fatal_error_stops_without_retrying` (all 8 fatal types), `test_a_fatal_error_stops_the_session_and_shows_up_on_admin` | ❌ not run |
 | 4 | 60 minutes continuous from `FileSource`, no memory growth beyond the 200-segment cap | ⚠️ partial — the cap and the ring bound are tested, the hour is not | ❌ not run (needs no credit) |
 
@@ -177,24 +177,36 @@ Tested in `test_an_outage_longer_than_the_replay_window_drops_the_oldest`,
   correct. The client now takes its clock as an argument and the test drives
   time explicitly. Worth remembering for any other timing test in this repo.
 
+## run8, 2026-10-13: the fixes confirmed
+
+A 103.7 s run (88.6 s billable) with a deliberate Wi-Fi drop. One **27.3 s**
+outage; the 10 s replay window covered the newest audio and **18.6 s** of the
+oldest was dropped and announced.
+
+| | run7 | run8 |
+| --- | --- | --- |
+| Join after reconnect | `behindMicrosoft` | clean break, no glued words |
+| Lag after recovery | ~20 s, for the rest of the run | none; resumed live |
+| Audience told | nothing | `[connection interrupted]` in both streams |
+| Stale error on `/admin` | `gaierror` still shown | cleared |
+| Grey partial at the drop | lost | committed (`an agent for their own work`) |
+
+Full write-up and the transcript are in `docs/live/run8-live.md`.
+
+**A capture is not a faithful fixture for reconnect behaviour.** The raw log
+records Soniox responses, not connection events, so replaying it reproduces
+the glued words and loses the committed partial - the page did neither. Good
+for caption logic, wrong for this. Recording drops into the capture would fix
+it and has not been done.
+
 ## Still to do live (ask Hamza first — this spends credit)
 
-One short run, after the run7 fixes:
+Live testing is **paused for the week** as of 2026-10-13. What is left:
 
-1. **Tick "Log raw responses"** on `/admin` before starting. It writes
-   `logs/live-<date>.jsonl`, which replays as a test fixture and is the only
-   way to answer token-level questions afterwards — the Arabic-in-English
-   phrase from run7 is still unexplained for exactly this reason.
-2. Say `agent` (singular) in a sentence. run7 only ever tested the plural.
-3. Drop Wi-Fi mid-sentence for ~10 s and keep talking. Confirm:
-   - the join reads `... behind ChatGPT`, not `behindChatGPT`;
-   - captions come back **near real time**, not twenty seconds late;
-   - if anything was dropped, `[connection interrupted]` appears in both
-     streams and `dropped_seconds` is non-zero on `/admin`;
-   - the last error has cleared and `engine_recovered` is 1.
-
-Separately, and with a deliberately wrong key, acceptance 3 is still unrun
-live: one start, one error, no retry loop.
+- **Acceptance 3**: start once with a deliberately wrong key and confirm
+  `/admin` shows `unauthenticated` with exactly one connection attempt.
+  Seconds of audio at most.
+- **A two-minute outage**, rather than the 27 s run8 managed.
 
 Acceptance 4, the 60-minute soak, **needs no credit** — run it from
 `FileSource` against the replay path, which exercises `CaptionState` and the

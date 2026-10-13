@@ -1077,11 +1077,18 @@ mid-sentence language switch**: Hamza said an Arabic phrase inside English
 speech and then translated himself aloud. A language-identification wobble at
 that boundary is the likeliest explanation.
 
-**This cannot be settled from the data we have**, because a live run keeps no
-token-level record - only the assembled paragraphs. `/admin/start?source=live`
-now takes `capture=true`, which writes the raw responses to
-`logs/live-<date>.jsonl` exactly as `probe_soniox.py` does. **Turn it on for
-the next run** and the question becomes a one-line grep.
+**run8 had the record and did not reproduce it.** The raw log of that run
+(2,221 tokens, with a deliberate mid-run switch from English into Arabic and
+**723 original Arabic tokens**) contains:
+
+- **0** tokens tagged `language: "en"` whose text is Arabic script, and
+- **0** original tokens with no `language` field at all.
+
+So the fallback in `_route` did not fire there either, and nothing leaked
+under conditions much like run7's. That does not explain run7, but it rules
+out anything systematic - it was a one-off language-identification wobble, not
+a property of mixed speech. If it recurs, `/admin`'s "Log raw responses" makes
+it a one-line grep.
 
 The consequence either way is small: one phrase in the wrong column, and the
 reader still sees its English translation beside it. It does not affect the

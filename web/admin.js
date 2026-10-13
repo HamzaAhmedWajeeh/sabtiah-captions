@@ -50,7 +50,7 @@
     shed: document.getElementById('s-shed'),
     audioDropped: document.getElementById('s-audio-dropped'),
     recording: document.getElementById('s-recording'),
-    capture: document.getElementById('s-capture'),
+    responseLog: document.getElementById('s-capture'),
     engine: document.getElementById('s-engine'),
     lag: document.getElementById('s-lag'),
     retries: document.getElementById('s-retries'),
@@ -60,7 +60,8 @@
     error: document.getElementById('s-error'),
     spend: document.getElementById('s-spend'),
     free: document.getElementById('s-free'),
-    runs: document.getElementById('s-runs')
+    runs: document.getElementById('s-runs'),
+    page: document.getElementById('page-problem')
   };
 
   var HINTS = {
@@ -96,6 +97,11 @@
   /* Only rebuild a dropdown when its contents actually changed, or the
    * operator's selection would reset itself once a second. */
   function fillSelect(select, values, labels) {
+    /* Defensive about both arguments. The operator page is the thing you
+     * reach for when something has already gone wrong, so it has to survive
+     * a payload or a DOM that is not what it expected. */
+    if (!select || !select.options) { return; }
+    values = values || [];
     var current = Array.prototype.map.call(select.options, function (o) {
       return o.value;
     });
@@ -113,6 +119,41 @@
 
   function seconds(value) {
     return value === null || value === undefined ? '—' : value + ' s';
+  }
+
+  /* Write one field. Missing values become an em dash rather than "undefined"
+   * or an exception - a status page is most useful exactly when the thing it
+   * reports is broken, so no single unexpected field may blank the rest. */
+  function text(el, value, fallback) {
+    if (!el) { return; }
+    el.textContent = (value === null || value === undefined || value === '')
+      ? (fallback === undefined ? '—' : fallback)
+      : value;
+  }
+
+  /* "a / b", or an em dash unless both halves are really there. Guards
+   * against null as well as undefined: the server sends neither today, but
+   * this page exists to be read when something is already wrong. */
+  function pair(a, b) {
+    var ok = function (v) { return v !== null && v !== undefined; };
+    return ok(a) && ok(b) ? a + ' / ' + b : '—';
+  }
+
+  function num(value, digits, suffix) {
+    if (typeof value !== 'number' || !isFinite(value)) { return '—'; }
+    return value.toFixed(digits) + (suffix || '');
+  }
+
+  /* Run one part of the render in isolation. One bad field used to take the
+   * whole table down with it: on 2026-10-13 a duplicate key in `els` made
+   * `fillSelect` throw on the first line of render(), and every row on the
+   * page showed an em dash while "Last error" showed a JavaScript message. */
+  function section(name, fn) {
+    try {
+      fn();
+    } catch (error) {
+      pageProblem(name + ': ' + (error && error.message || error));
+    }
   }
 
   function renderMeter(level) {
@@ -155,49 +196,68 @@
   }
 
   function render(status) {
-    fillSelect(els.capture, status.captures || []);
-    fillSelect(els.file, status.audio_files || []);
-    els.running.textContent = status.running
-      ? (status.paced ? 'running (real time)' : 'running (fast)')
-      : (status.live ? 'live, no feed' : 'stopped');
-    els.sourceText.textContent = status.source || '—';
-    els.elapsed.textContent = seconds(status.elapsed);
-    els.audio.textContent = status.audio_total_s
-      ? (status.audio_ms / 1000).toFixed(1) + ' / ' + status.audio_total_s + ' s'
-      : (status.audio_ms ? (status.audio_ms / 1000).toFixed(1) + ' s' : '—');
-    els.responses.textContent = status.responses;
-    els.seq.textContent = status.seq;
-    els.viewers.textContent = status.viewers + ' / ' + status.max_viewers;
-    els.shed.textContent = status.rejected + ' / ' + status.dropped;
-    els.audioDropped.textContent = status.dropped_chunks === undefined
-      ? '—' : status.dropped_chunks + ' chunk(s)';
-    els.recording.textContent = status.recording || 'off';
-    els.capture.textContent = status.capture || 'off';
-    els.engine.textContent = status.engine_state || '—';
-    els.engine.className = status.engine_state === 'reconnecting'
-      ? 'error' : '';
-    els.lag.textContent = status.lag_seconds === undefined
-      ? '—' : status.lag_seconds.toFixed(2) + ' s';
-    els.retries.textContent = status.reconnects === undefined
-      ? '—' : status.reconnects + ' / ' + status.rollovers;
-    els.lost.textContent = status.dropped_seconds === undefined
-      ? '—' : status.dropped_seconds.toFixed(1) + ' s';
-    els.lost.className = status.dropped_seconds ? 'error' : '';
-    els.silence.textContent = status.silent_seconds === undefined
-      ? '—' : status.silent_seconds.toFixed(0) + ' s';
-    els.thisRun.textContent = status.streamed_seconds === undefined
-      ? '—' : (status.streamed_seconds / 60).toFixed(2) + ' min';
-    els.error.textContent = status.error || 'none';
-    els.error.className = status.error ? 'error' : '';
-    els.start.disabled = !!status.running;
-    els.stop.disabled = !status.running;
-    renderMeter(status.level);
-    renderUsage(status.usage);
+    status = status || {};
+    section('sources', function () {
+      fillSelect(els.capture, status.captures);
+      fillSelect(els.file, status.audio_files);
+    });
+    section('session', function () {
+      text(els.running, status.running
+        ? (status.paced ? 'running (real time)' : 'running (fast)')
+        : (status.live ? 'live, no feed' : 'stopped'));
+      text(els.sourceText, status.source);
+      text(els.elapsed, seconds(status.elapsed));
+      text(els.audio, status.audio_total_s
+        ? num(status.audio_ms / 1000, 1) + ' / ' + status.audio_total_s + ' s'
+        : (status.audio_ms ? num(status.audio_ms / 1000, 1, ' s') : '—'));
+      text(els.responses, status.responses);
+      text(els.seq, status.seq);
+      text(els.viewers, pair(status.viewers, status.max_viewers));
+      text(els.shed, pair(status.rejected, status.dropped));
+      text(els.audioDropped, status.dropped_chunks === undefined
+        || status.dropped_chunks === null
+        ? '—' : status.dropped_chunks + ' chunk(s)');
+      text(els.recording, status.recording, 'off');
+      text(els.responseLog, status.capture, 'off');
+    });
+    section('engine', function () {
+      text(els.engine, status.engine_state);
+      if (els.engine) {
+        els.engine.className = status.engine_state === 'reconnecting'
+          ? 'error' : '';
+      }
+      text(els.lag, num(status.lag_seconds, 2, ' s'));
+      text(els.retries, pair(status.reconnects, status.rollovers));
+      text(els.lost, num(status.dropped_seconds, 1, ' s'));
+      if (els.lost) { els.lost.className = status.dropped_seconds ? 'error' : ''; }
+      text(els.silence, num(status.silent_seconds, 0, ' s'));
+      text(els.thisRun, num(
+        typeof status.streamed_seconds === 'number'
+          ? status.streamed_seconds / 60 : undefined, 2, ' min'));
+    });
+    section('error', function () {
+      /* The engine's error, not the page's. A JavaScript exception used to
+       * land here, which read as "the transcription failed" when the truth
+       * was "this page has a bug". Page problems go to their own line. */
+      text(els.error, status.error, 'none');
+      if (els.error) { els.error.className = status.error ? 'error' : ''; }
+      if (els.start) { els.start.disabled = !!status.running; }
+      if (els.stop) { els.stop.disabled = !status.running; }
+    });
+    section('meter', function () { renderMeter(status.level); });
+    section('usage', function () { renderUsage(status.usage); });
+  }
+
+  /* A problem reaching or reading the server: this page's problem, kept
+   * apart from the engine's "Last error" row so the two are never confused. */
+  function pageProblem(message) {
+    if (!els.page) { return; }
+    els.page.textContent = message || '';
+    els.page.hidden = !message;
   }
 
   function fail(message) {
-    els.error.textContent = message;
-    els.error.className = 'error';
+    pageProblem(message);
   }
 
   function get(path) {
@@ -209,7 +269,8 @@
   }
 
   function poll() {
-    get('/admin/status').then(render)
+    get('/admin/status')
+      .then(function (status) { pageProblem(''); render(status); })
       .catch(function (error) { fail(String(error.message || error)); });
   }
 

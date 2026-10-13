@@ -17,6 +17,11 @@
 <body class="admin" data-page="admin">
   <h1>Sabtiah Live Captions — operator</h1>
 
+  <!-- This page's own trouble, not the engine's: a failed poll, or a bug in
+       admin.js. Kept out of the "Last error" row so a JavaScript fault is
+       never read as a transcription failure. -->
+  <p class="page-problem" id="page-problem" hidden></p>
+
   <fieldset>
     <legend>Session</legend>
     <div class="row">

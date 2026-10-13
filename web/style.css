@@ -328,6 +328,17 @@ body.admin .meter-mark {
   background: var(--line);
 }
 
+body.admin .page-problem {
+  color: #f87171;
+  border: 1px solid #f87171;
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  margin: 0 0 0.75rem;
+  max-width: 44rem;
+}
+
+body.admin .page-problem[hidden] { display: none; }
+
 body.admin .warn { color: #fbbf24; font-weight: 600; }
 
 body.admin .clip {
