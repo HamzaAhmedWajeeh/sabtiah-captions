@@ -243,30 +243,158 @@ body.screen .stream[dir="rtl"] { line-height: 1.5; }
 body.screen .stream p { margin: 0 0 0.5em; }
 body.screen .stream p:last-child { margin-bottom: 0; }
 
+
 /* -- operator page ----------------------------------------------------- */
+/*
+   Laid out to be read from a few steps away during a talk. The top bar is
+   sticky and carries the only four things that matter mid-session: what the
+   state is, how long it has run, who is watching, and the two buttons. The
+   rest is reference material and lives below.
+*/
 
 body.admin {
   display: block;
   overflow: auto;
   font-size: 15px;
-  padding: 1rem;
+  padding: 0 0 3rem;
 }
 
-body.admin h1 { font-size: 1rem; margin-bottom: 0.75rem; }
+body.admin .wrap {
+  padding: 0 1.25rem;
+  margin: 0 auto;
+  max-width: 108rem;
+}
 
-body.admin fieldset {
+/* -- sticky top bar ----------------------------------------------------- */
+
+body.admin .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 1.25rem;
+  margin-bottom: 1rem;
+  background: #111116;
+  border-bottom: 1px solid var(--line);
+}
+
+body.admin .topbar h1 {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--dim);
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+/* The pill is the one thing meant to be legible across a room. */
+body.admin .pill {
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 0.3rem 1.1rem;
+  border-radius: 999px;
+  border: 2px solid var(--line);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+body.admin .pill.live {
+  background: #7f1d1d;
+  border-color: #f87171;
+  color: #fff;
+  /* A slow pulse, not a flash: visible in peripheral vision, not annoying
+     to sit beside for an hour. */
+  animation: adminpulse 2.4s ease-in-out infinite;
+}
+
+body.admin .pill.replay { border-color: var(--accent); color: var(--accent); }
+body.admin .pill.audio { border-color: #a78bfa; color: #a78bfa; }
+body.admin .pill.paused { border-color: #fbbf24; color: #fbbf24; }
+body.admin .pill.stopped { border-color: var(--line); color: var(--dim); }
+
+@keyframes adminpulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.5); }
+  50% { box-shadow: 0 0 0 0.5rem rgba(248, 113, 113, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.admin .pill.live { animation: none; }
+}
+
+body.admin .topstats {
+  display: flex;
+  gap: 1.5rem;
+  flex: 1 1 auto;
+}
+
+body.admin .topstat { display: flex; flex-direction: column; line-height: 1.15; }
+body.admin .topstat b {
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+body.admin .topstat span {
+  font-size: 0.68rem;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+body.admin .topactions { display: flex; gap: 0.5rem; }
+
+/* -- the grid ----------------------------------------------------------- */
+
+body.admin .grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr;
+}
+
+/* One column on a phone, two from tablet width, and a wider left column on
+   a desk monitor so the forms are not cramped next to the status tables. */
+@media (min-width: 60rem) {
+  body.admin .grid { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+}
+
+@media (min-width: 100rem) {
+  body.admin .grid { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+}
+
+body.admin .col { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+
+/* -- cards -------------------------------------------------------------- */
+
+body.admin .card {
   border: 1px solid var(--line);
-  border-radius: 8px;
-  margin: 0 0 1rem;
-  padding: 0.75rem 1rem 1rem;
-  max-width: 44rem;
+  border-radius: 10px;
+  background: #121217;
+  padding: 0.9rem 1.1rem 1.1rem;
 }
 
-body.admin legend { color: var(--dim); font-size: 0.78rem; padding: 0 0.4rem; }
+body.admin .card > h2 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  font-weight: 600;
+  margin: 0 0 0.7rem;
+}
+
+body.admin .card.danger { border-color: #f87171; }
+body.admin .card.attention { border-color: #fbbf24; }
+
+/* -- controls ----------------------------------------------------------- */
 
 body.admin label { display: inline-flex; align-items: center; gap: 0.4rem; }
 
-body.admin select, body.admin button {
+body.admin select,
+body.admin button,
+body.admin input[type="number"],
+body.admin input[type="text"],
+body.admin textarea {
   font: inherit;
   color: var(--fg);
   background: #16161b;
@@ -276,109 +404,250 @@ body.admin select, body.admin button {
   min-height: 2.2rem;
 }
 
-body.admin button { cursor: pointer; font-weight: 600; }
-body.admin button.primary { background: var(--accent); color: #06121f; border-color: var(--accent); }
-body.admin .row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+body.admin input[type="number"] { width: 4.5rem; }
+body.admin textarea { resize: vertical; min-height: 3.6rem; }
+body.admin input[type="text"], body.admin textarea { width: 100%; }
 
-body.admin input[type="number"] {
-  font: inherit;
-  color: var(--fg);
-  background: #16161b;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.4rem 0.5rem;
-  width: 4.5rem;
-  min-height: 2.2rem;
+body.admin button { cursor: pointer; font-weight: 600; white-space: nowrap; }
+body.admin button:disabled { opacity: 0.4; cursor: default; }
+
+body.admin button.primary {
+  background: var(--accent);
+  color: #06121f;
+  border-color: var(--accent);
 }
 
-body.admin .row[hidden] { display: none; }
+/* The live start is a different colour from every other button on the page,
+   because it is the only one that spends money. */
+body.admin button.spend {
+  background: #dc2626;
+  border-color: #f87171;
+  color: #fff;
+}
+
+body.admin button.ghost { background: transparent; }
+
+body.admin .row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+/* `!important` on purpose. `.applybar` and `.confirm` set `display: flex`
+   and are declared later with equal specificity, so without it a hidden bar
+   stays on screen - which is how the "apply now" bar and the live-run confirm
+   both showed in a stopped session. A visibility utility has to beat layout. */
+body.admin [hidden] { display: none !important; }
 body.admin .row + .row { margin-top: 0.6rem; }
 body.admin code { font-size: 0.9em; color: var(--dim); }
-
-/* Input level meter. A plain div whose width is set from the RMS in dBFS:
-   no canvas, no animation frames, and it keeps working on the venue laptop
-   with a dozen tabs open. The marks sit at -20 and -10 dBFS, which is where
-   speech peaks should land. */
-body.admin .meter {
-  position: relative;
-  height: 1.4rem;
-  background: #16161b;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
-  max-width: 44rem;
-}
-
-body.admin .meter-fill {
-  height: 100%;
-  width: 0;
-  background: var(--accent);
-  /* Short enough to still read as live, long enough that a 7 Hz poll does
-     not look like a strobe. */
-  transition: width 120ms linear;
-}
-
-body.admin .meter-fill.hot { background: #fbbf24; }
-
-body.admin .meter-mark {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--line);
-}
-
-body.admin .page-problem {
-  color: #f87171;
-  border: 1px solid #f87171;
-  border-radius: 6px;
-  padding: 0.4rem 0.6rem;
-  margin: 0 0 0.75rem;
-  max-width: 44rem;
-}
-
-body.admin .page-problem[hidden] { display: none; }
 
 body.admin label.wide {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 0.25rem;
-  flex: 1 1 18rem;
+  flex: 1 1 14rem;
   color: var(--dim);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
 }
 
-body.admin input[type="text"], body.admin textarea {
-  font: inherit;
-  color: var(--fg);
-  background: #16161b;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.4rem 0.5rem;
-  width: 100%;
-  resize: vertical;
+body.admin .note {
+  color: var(--dim);
+  font-size: 0.8rem;
+  margin: 0.55rem 0 0;
+  line-height: 1.45;
 }
-
-body.admin .pending { color: #fbbf24; font-weight: 600; }
-body.admin .saved { color: #4ade80; }
 
 body.admin .warn { color: #fbbf24; font-weight: 600; }
+body.admin .pending { color: #fbbf24; font-weight: 700; }
+body.admin .saved { color: #4ade80; }
+body.admin .error { color: #f87171; }
 
-body.admin .clip {
-  color: #f87171;
-  font-weight: 700;
-  margin-left: 0.6rem;
+/* -- banners ------------------------------------------------------------ */
+
+body.admin .banner {
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  margin: 0 0 1rem;
+  font-weight: 600;
 }
 
-body.admin .clip[hidden] { display: none; }
+body.admin .banner.page { color: #f87171; border: 1px solid #f87171; }
+body.admin .banner.engine { background: #7f1d1d; color: #fff; }
 
-body.admin table { border-collapse: collapse; width: 100%; max-width: 44rem; }
+/* The "saved but not applied" state during a live run. It has to be
+   impossible to walk past. */
+body.admin .applybar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  background: #3f2d06;
+  border: 1px solid #fbbf24;
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  margin-top: 0.75rem;
+}
+
+body.admin .applybar b { color: #fbbf24; }
+
+body.admin .confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  background: #450a0a;
+  border: 1px solid #f87171;
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  margin-top: 0.6rem;
+}
+
+/* -- level meter -------------------------------------------------------- */
+
+body.admin .meterwrap { margin-bottom: 1rem; }
+
+body.admin .meter {
+  position: relative;
+  height: 3rem;
+  background: #16161b;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+body.admin .meter-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #4ade80 0%, #4ade80 70%, #fbbf24 100%);
+  transition: width 120ms linear;
+}
+
+body.admin .meter-fill.hot { background: #f87171; }
+
+/* The good-speech band, drawn behind the fill so the operator can aim for
+   it rather than remember a number. */
+body.admin .meter-band {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 16.7%;
+  background: rgba(74, 222, 128, 0.12);
+  border-left: 1px solid rgba(74, 222, 128, 0.5);
+  border-right: 1px solid rgba(74, 222, 128, 0.5);
+  pointer-events: none;
+}
+
+body.admin .meter-clipzone {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: 91.7%;
+  right: 0;
+  background: rgba(248, 113, 113, 0.14);
+  border-left: 1px solid rgba(248, 113, 113, 0.6);
+  pointer-events: none;
+}
+
+body.admin .meter-label {
+  position: absolute;
+  z-index: 3;
+  font-weight: 700;
+  text-shadow: 0 1px 2px #000;
+  top: 0.25rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  pointer-events: none;
+}
+
+body.admin .meter-label.good { left: 51%; color: #4ade80; }
+body.admin .meter-label.clip { left: 92.7%; color: #f87171; }
+
+/* The words do not fit beside each other on a phone; the coloured bands
+   still say where to aim. */
+@media (max-width: 34rem) {
+  body.admin .meter-label { display: none; }
+  body.admin .meter { height: 2.2rem; }
+}
+
+body.admin .meterline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.9rem;
+  margin-top: 0.4rem;
+}
+
+body.admin .meterline b { font-variant-numeric: tabular-nums; font-size: 1rem; }
+
+body.admin .clip {
+  color: #fff;
+  background: #dc2626;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+}
+
+/* -- status tables ------------------------------------------------------ */
+
+body.admin table { border-collapse: collapse; width: 100%; }
+
 body.admin th, body.admin td {
   text-align: left;
   padding: 0.3rem 0.5rem;
   border-bottom: 1px solid var(--line);
   font-variant-numeric: tabular-nums;
 }
-body.admin th { color: var(--dim); font-weight: 500; width: 12rem; }
-body.admin .error { color: #f87171; }
+
+body.admin th { color: var(--dim); font-weight: 500; width: 11rem; }
+
+body.admin tr.group th {
+  color: var(--fg);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding-top: 0.8rem;
+  border-bottom-color: transparent;
+}
+
+body.admin .stale {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #fbbf24;
+  border: 1px solid #fbbf24;
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  margin-left: 0.5rem;
+}
+
+/* -- spend -------------------------------------------------------------- */
+
+body.admin .spendline {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+}
+
+body.admin .spendfig { display: flex; flex-direction: column; }
+body.admin .spendfig b { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+body.admin .spendfig span {
+  font-size: 0.68rem;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+body.admin .spendbar {
+  height: 0.5rem;
+  background: #16161b;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 0.5rem 0 0.2rem;
+}
+
+body.admin .spendbar div { height: 100%; width: 0; background: var(--accent); }
+body.admin .spendbar div.low { background: #fbbf24; }
+body.admin .spendbar div.out { background: #f87171; }

@@ -8,182 +8,227 @@
   <title>Sabtiah Captions — operator</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<!-- Never linked from the audience page (BUILD_SPEC section 8). Reached only
-     with the operator token in the query string; every endpoint below
-     re-checks it, so this page carries no authority of its own.
-     Phase 3: start and stop a replayed capture, and watch the hub.
-     Phase 4: pick an input, watch the level, and see API spend.
-     Phase 6 adds session context and the log/translation-direction toggles. -->
+<!-- The operator's page. Never linked from the audience page, and reached
+     only with the operator token in the query string; every endpoint
+     re-checks that token, so this page carries no authority of its own.
+
+     Laid out to be read mid-talk: the top bar is sticky and holds the state,
+     the clock, the viewer count and the two buttons. Everything below it is
+     reference material. -->
 <body class="admin" data-page="admin">
-  <h1>Sabtiah Live Captions — operator</h1>
 
-  <!-- This page's own trouble, not the engine's: a failed poll, or a bug in
-       admin.js. Kept out of the "Last error" row so a JavaScript fault is
-       never read as a transcription failure. -->
-  <p class="page-problem" id="page-problem" hidden></p>
-
-  <fieldset>
-    <legend>Session</legend>
-    <div class="row">
-      <label>Source
-        <select id="source">
-          <option value="replay">Replay a capture — captions</option>
-          <option value="mic">Microphone — audio only</option>
-          <option value="file">Recording — audio only</option>
-          <option value="live">Live captions — microphone, SPENDS CREDIT</option>
-        </select>
-      </label>
-      <label>
-        <input type="checkbox" id="paced" checked>
-        Real time
-      </label>
+  <header class="topbar">
+    <div class="pill stopped" id="state-pill">STOPPED</div>
+    <div class="topstats">
+      <div class="topstat"><b id="t-elapsed">—</b><span>elapsed</span></div>
+      <div class="topstat"><b id="t-viewers">—</b><span>viewers</span></div>
+      <div class="topstat"><b id="t-engine">—</b><span>connection</span></div>
+      <div class="topstat"><b id="t-spend">—</b><span>api used</span></div>
+    </div>
+    <div class="topactions">
       <button type="button" id="start" class="primary">Start</button>
-      <button type="button" id="stop">Stop</button>
+      <button type="button" id="stop" class="ghost">Stop</button>
+    </div>
+    <h1>Sabtiah Live Captions</h1>
+  </header>
+
+  <div class="wrap">
+
+    <!-- Something wrong with this page itself: a failed request, or a bug in
+         admin.js. Kept apart from the engine's error so a page fault is never
+         read as a transcription failure. -->
+    <p class="banner page" id="page-problem" hidden></p>
+    <!-- The engine's error, in red at the top where it cannot be missed. -->
+    <p class="banner engine" id="error-banner" hidden></p>
+
+    <div class="meterwrap">
+      <!-- aria-hidden: the numbers beside the bar say the same thing, and a
+           bar repainted several times a second is noise to a screen reader. -->
+      <div class="meter" id="meter" aria-hidden="true">
+        <div class="meter-fill" id="meter-fill"></div>
+        <div class="meter-band"></div>
+        <div class="meter-clipzone"></div>
+        <div class="meter-label good">good speech</div>
+        <div class="meter-label clip">too loud</div>
+      </div>
+      <p class="meterline">
+        <b id="s-level">—</b>
+        <span id="s-clip" class="clip" hidden>CLIPPING</span>
+        <span class="note" id="meter-note">Aim for the green band. If it turns
+          red, turn the mixer down.</span>
+      </p>
     </div>
 
-    <div class="row" data-for="replay">
-      <label>Capture
-        <select id="capture"></select>
-      </label>
-    </div>
+    <main class="grid">
 
-    <div class="row" data-for="live">
-      <label class="warn">
-        <input type="checkbox" id="arm">
-        I mean it — stream to the API and spend credit
-      </label>
-    </div>
+      <div class="col">
 
-    <div class="row" data-for="mic live">
-      <label>Device
-        <select id="device"></select>
-      </label>
-      <label>Channel
-        <input type="number" id="channel" value="1" min="1" max="16">
-      </label>
-      <button type="button" id="refresh-devices">Refresh</button>
-    </div>
+        <section class="card" id="source-card">
+          <h2>Source</h2>
+          <div class="row">
+            <label>What to run
+              <select id="source">
+                <option value="replay">Replay a saved recording</option>
+                <option value="mic">Microphone — check levels only</option>
+                <option value="file">Audio file — check levels only</option>
+                <option value="live">Live captions — uses paid minutes</option>
+              </select>
+            </label>
+            <label>
+              <input type="checkbox" id="paced" checked>
+              Play at real speed
+            </label>
+          </div>
 
-    <div class="row" data-for="file">
-      <label>Recording
-        <select id="file"></select>
-      </label>
-    </div>
+          <div class="row" data-for="replay">
+            <label>Recording
+              <select id="capture"></select>
+            </label>
+          </div>
 
-    <div class="row" data-for="mic file live">
-      <label>
-        <input type="checkbox" id="record">
-        Record this run to <code>recordings/</code>
-      </label>
-      <label data-for="live">
-        <input type="checkbox" id="log-responses">
-        Log raw responses to <code>logs/</code> (replays as a test fixture)
-      </label>
-    </div>
+          <div class="row" data-for="file">
+            <label>Audio file
+              <select id="file"></select>
+            </label>
+          </div>
 
-    <p class="note" id="hint"></p>
-  </fieldset>
+          <div class="row" data-for="mic live">
+            <label>Microphone
+              <select id="device"></select>
+            </label>
+            <label>Channel
+              <input type="number" id="channel" value="1" min="1" max="16">
+            </label>
+            <button type="button" id="refresh-devices" class="ghost">Refresh</button>
+          </div>
 
-  <fieldset>
-    <legend>This talk</legend>
-    <p class="note">
-      Private: these stay on this laptop and go only to the transcription
-      API. They never appear on the audience page. One name per line.
-    </p>
-    <div class="row">
-      <label class="wide">Title
-        <input type="text" id="d-title" autocomplete="off">
-      </label>
-    </div>
-    <div class="row">
-      <label class="wide">Speakers
-        <textarea id="d-speakers" rows="3" autocomplete="off"></textarea>
-      </label>
-      <label class="wide">Companies
-        <textarea id="d-companies" rows="3" autocomplete="off"></textarea>
-      </label>
-    </div>
-    <div class="row">
-      <label class="wide">Extra terms for this talk
-        <textarea id="d-terms" rows="3" autocomplete="off"></textarea>
-      </label>
-      <label class="wide">Notes
-        <textarea id="d-notes" rows="3" autocomplete="off"></textarea>
-      </label>
-    </div>
-    <p class="note" id="d-glossary"></p>
-    <div class="row">
-      <button type="button" id="d-save" class="primary">Save</button>
-      <button type="button" id="d-apply" hidden>Apply now</button>
-      <button type="button" id="d-clear">Clear session details</button>
-      <span id="d-state" class="note"></span>
-    </div>
-  </fieldset>
+          <div class="row" data-for="mic file live">
+            <label>
+              <input type="checkbox" id="record">
+              Save the audio to this laptop
+            </label>
+            <label data-for="live">
+              <input type="checkbox" id="log-responses">
+              Keep a log of this run
+            </label>
+          </div>
 
-  <fieldset>
-    <legend>Input level</legend>
-    <!-- aria-hidden: the numbers beside the bar carry the same information,
-         and a bar repainted ten times a second is noise to a screen reader. -->
-    <div class="meter" id="meter" aria-hidden="true">
-      <div class="meter-fill" id="meter-fill"></div>
-      <div class="meter-mark" style="left: 66.7%"></div>
-      <div class="meter-mark" style="left: 83.3%"></div>
-    </div>
-    <p class="note">
-      <span id="s-level">—</span>
-      <span id="s-clip" class="clip">CLIPPING</span>
-    </p>
-    <p class="note">
-      Speech should sit in the middle of the bar and touch the first mark on
-      peaks. If <b>CLIPPING</b> lights, turn the mixer down — no later stage
-      can undo it.
-    </p>
-  </fieldset>
+          <div class="row" data-for="live">
+            <label class="warn">
+              <input type="checkbox" id="arm">
+              I mean it — this run uses paid minutes
+            </label>
+          </div>
 
-  <fieldset>
-    <legend>Status</legend>
-    <table>
-      <tbody>
-        <tr><th>Session</th><td id="s-running">—</td></tr>
-        <tr><th>Source</th><td id="s-source">—</td></tr>
-        <tr><th>Elapsed</th><td id="s-elapsed">—</td></tr>
-        <tr><th>Audio</th><td id="s-audio">—</td></tr>
-        <tr><th>Responses</th><td id="s-responses">—</td></tr>
-        <tr><th>Sequence</th><td id="s-seq">—</td></tr>
-        <tr><th>Viewers</th><td id="s-viewers">—</td></tr>
-        <tr><th>Refused / dropped</th><td id="s-shed">—</td></tr>
-        <tr><th>Audio dropped</th><td id="s-audio-dropped">—</td></tr>
-        <tr><th>Recording</th><td id="s-recording">—</td></tr>
-        <tr><th>Response log</th><td id="s-capture">—</td></tr>
-        <tr><th>Talk details</th><td id="s-details">—</td></tr>
-        <tr><th>Connection</th><td id="s-engine">—</td></tr>
-        <tr><th>Caption delay</th><td id="s-lag">—</td></tr>
-        <tr><th>Reconnects / rollovers</th><td id="s-retries">—</td></tr>
-        <tr><th>Audio dropped (never sent)</th><td id="s-lost">—</td></tr>
-        <tr><th>Silence</th><td id="s-silence">—</td></tr>
-        <tr><th>Last error</th><td id="s-error">—</td></tr>
-      </tbody>
-    </table>
-  </fieldset>
+          <p class="note" id="hint"></p>
 
-  <fieldset>
-    <legend>API spend</legend>
-    <table>
-      <tbody>
-        <tr><th>Streamed to the engine</th><td id="s-spend">—</td></tr>
-        <tr><th>This run</th><td id="s-this-run">—</td></tr>
-        <tr><th>Free runs (replay, mic)</th><td id="s-free">—</td></tr>
-        <tr><th>Runs logged</th><td id="s-runs">—</td></tr>
-      </tbody>
-    </table>
-    <p class="note">
-      From <code>logs/usage.jsonl</code>. Replay and microphone runs stream
-      nothing and cost nothing; only Phase 5's live client will add to the
-      first line. The word for the engine is kept off this page on purpose:
-      a test greps every served file for it, and a blunt check is one that
-      cannot be argued with the night before a talk.
-    </p>
-  </fieldset>
+          <div class="confirm" id="confirm-bar" hidden>
+            <b class="warn">Start a live run? This uses paid minutes.</b>
+            <button type="button" id="confirm-yes" class="spend">Yes, start live</button>
+            <button type="button" id="confirm-no" class="ghost">Cancel</button>
+          </div>
+        </section>
+
+        <section class="card" id="details-card">
+          <h2>This talk</h2>
+          <p class="note" id="details-note">
+            Stays on this laptop. Helps get names spelled right. One per line.
+          </p>
+          <div class="row">
+            <label class="wide">Title
+              <input type="text" id="d-title" autocomplete="off">
+            </label>
+          </div>
+          <div class="row">
+            <label class="wide">Speakers
+              <textarea id="d-speakers" rows="3" autocomplete="off"></textarea>
+            </label>
+            <label class="wide">Companies
+              <textarea id="d-companies" rows="3" autocomplete="off"></textarea>
+            </label>
+          </div>
+          <div class="row">
+            <label class="wide">Words to get right
+              <textarea id="d-terms" rows="3" autocomplete="off"></textarea>
+            </label>
+            <label class="wide">Notes
+              <textarea id="d-notes" rows="3" autocomplete="off"></textarea>
+            </label>
+          </div>
+          <p class="note" id="d-glossary"></p>
+          <div class="row">
+            <button type="button" id="d-save" class="primary">Save</button>
+            <button type="button" id="d-clear" class="ghost">Clear</button>
+            <span id="d-state" class="note"></span>
+          </div>
+
+          <div class="applybar" id="apply-bar" hidden>
+            <b>Saved — not in use yet.</b>
+            <span class="note" id="apply-note">The talk is running with the
+              old details until you apply them.</span>
+            <button type="button" id="d-apply" class="primary">Apply now</button>
+          </div>
+        </section>
+
+      </div>
+
+      <div class="col">
+
+        <section class="card" id="spend-card">
+          <h2>API use</h2>
+          <div class="spendline">
+            <div class="spendfig"><b id="s-spend">—</b><span>minutes used</span></div>
+            <div class="spendfig"><b id="s-cost">—</b><span>spent</span></div>
+            <div class="spendfig"><b id="s-left">—</b><span>left</span></div>
+          </div>
+          <div class="spendbar"><div id="spend-fill"></div></div>
+          <p class="note" id="spend-note"></p>
+          <table>
+            <tbody>
+              <tr><th>This run</th><td id="s-this-run">—</td></tr>
+              <tr><th>Free runs</th><td id="s-free">—</td></tr>
+              <tr><th>Runs recorded</th><td id="s-runs">—</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card" id="status-card">
+          <h2><span id="status-heading">Status</span></h2>
+          <table>
+            <tbody>
+              <tr class="group"><th colspan="2">Audio</th></tr>
+              <tr data-row><th>Source</th><td id="s-source">—</td></tr>
+              <tr data-row><th>Running for</th><td id="s-elapsed">—</td></tr>
+              <tr data-row><th>Audio in</th><td id="s-audio">—</td></tr>
+              <tr data-row><th>Chunks dropped</th><td id="s-audio-dropped">—</td></tr>
+              <tr data-row><th>Saved audio</th><td id="s-recording">—</td></tr>
+              <tr data-row><th>Run log</th><td id="s-capture">—</td></tr>
+
+              <tr class="group"><th colspan="2">Connection</th></tr>
+              <tr data-row><th>State</th><td id="s-engine">—</td></tr>
+              <tr data-row><th>Caption delay</th><td id="s-lag">—</td></tr>
+              <tr data-row><th>Drop-outs</th><td id="s-retries">—</td></tr>
+              <tr data-row><th>Speech lost</th><td id="s-lost">—</td></tr>
+              <tr data-row><th>Quiet for</th><td id="s-silence">—</td></tr>
+
+              <tr class="group"><th colspan="2">Captions</th></tr>
+              <tr data-row><th>Lines received</th><td id="s-responses">—</td></tr>
+              <tr data-row><th>Update number</th><td id="s-seq">—</td></tr>
+              <tr data-row><th>Phones watching</th><td id="s-viewers">—</td></tr>
+              <tr data-row><th>Turned away</th><td id="s-shed">—</td></tr>
+              <tr data-row><th>Talk details</th><td id="s-details">—</td></tr>
+
+              <tr class="group"><th colspan="2">Errors</th></tr>
+              <tr data-row><th>Last error</th><td id="s-error">none</td></tr>
+            </tbody>
+          </table>
+          <p class="note" id="status-note"></p>
+        </section>
+
+      </div>
+
+    </main>
+  </div>
 
   <script src="/static/admin.js"></script>
 </body>

@@ -1,13 +1,14 @@
 /* Operator page.
  *
- * Phase 3 scope: start/stop a replayed capture, watch the hub.
- * Phase 4 adds the input device, the level meter and the spend ledger.
+ * Written to be read during a talk, not studied afterwards: the sticky top
+ * bar carries the state, the clock, the viewer count and the two buttons,
+ * and everything below it is reference.
  *
  * The admin token is read from the URL and sent back on every request; the
- * server re-checks it on each one, so this page holds no authority of its
- * own and nothing here is trusted. It is deliberately not stored in
- * localStorage: the operator page is opened once from a bookmark on the
- * venue laptop, and a token in web storage outlives the talk.
+ * server re-checks it each time, so this page holds no authority of its own
+ * and nothing here is trusted. It is deliberately not stored in
+ * localStorage: the page is opened once from a bookmark on the venue laptop,
+ * and a token in web storage outlives the talk.
  */
 
 (function () {
@@ -17,8 +18,8 @@
   /* The meter polls faster than the rest. A level that updates once a second
    * cannot show a syllable, and showing the gain is the whole point of it. */
   var METER_MS = 150;
-  /* Meter range, matching audio_source.FLOOR_DB. -20 dBFS and -10 dBFS are
-   * the two marks drawn on the bar. */
+  /* Meter range, matching the floor the server reports. The green band and
+   * the clip zone in the stylesheet are placed against this same scale. */
   var FLOOR_DB = -60;
 
   var token = new URLSearchParams(window.location.search).get('token') || '';
@@ -37,10 +38,18 @@
     start: document.getElementById('start'),
     stop: document.getElementById('stop'),
     hint: document.getElementById('hint'),
+    confirmBar: document.getElementById('confirm-bar'),
+    confirmYes: document.getElementById('confirm-yes'),
+    confirmNo: document.getElementById('confirm-no'),
+    pill: document.getElementById('state-pill'),
+    tElapsed: document.getElementById('t-elapsed'),
+    tViewers: document.getElementById('t-viewers'),
+    tEngine: document.getElementById('t-engine'),
+    tSpend: document.getElementById('t-spend'),
     meterFill: document.getElementById('meter-fill'),
+    meterNote: document.getElementById('meter-note'),
     level: document.getElementById('s-level'),
     clip: document.getElementById('s-clip'),
-    running: document.getElementById('s-running'),
     sourceText: document.getElementById('s-source'),
     elapsed: document.getElementById('s-elapsed'),
     audio: document.getElementById('s-audio'),
@@ -58,10 +67,24 @@
     silence: document.getElementById('s-silence'),
     thisRun: document.getElementById('s-this-run'),
     error: document.getElementById('s-error'),
+    errorBanner: document.getElementById('error-banner'),
+    statusHeading: document.getElementById('status-heading'),
+    statusNote: document.getElementById('status-note'),
+    statusCard: document.getElementById('status-card'),
     spend: document.getElementById('s-spend'),
+    cost: document.getElementById('s-cost'),
+    left: document.getElementById('s-left'),
+    spendFill: document.getElementById('spend-fill'),
+    spendNote: document.getElementById('spend-note'),
+    spendCard: document.getElementById('spend-card'),
     free: document.getElementById('s-free'),
     runs: document.getElementById('s-runs'),
     page: document.getElementById('page-problem'),
+    sourceCard: document.getElementById('source-card'),
+    detailsCard: document.getElementById('details-card'),
+    detailsNote: document.getElementById('details-note'),
+    applyBar: document.getElementById('apply-bar'),
+    applyNote: document.getElementById('apply-note'),
     dTitle: document.getElementById('d-title'),
     dSpeakers: document.getElementById('d-speakers'),
     dCompanies: document.getElementById('d-companies'),
@@ -75,16 +98,15 @@
     details: document.getElementById('s-details')
   };
 
+  /* One short line each, in the words an operator would use. */
   var HINTS = {
-    replay: 'Replay costs no API credit. This is the demo path: captions ' +
-            'from a saved capture, at real speed.',
-    mic: 'Live capture, Phase 4. Audio is measured and discarded — there ' +
-         'are no captions until the engine client lands in Phase 5.',
-    file: 'Plays a recording through the capture path at real time. Same ' +
-          'as the microphone, minus the microphone.',
-    live: 'The real thing, and the only option here that costs money. ' +
-          'Captions reach the phones. Ten minutes of silence ends the ' +
-          'stream by itself and shows "paused"; the next sound resumes it.'
+    replay: 'Plays a recording you already have. Free, and the safest way to ' +
+            'check the phones.',
+    mic: 'Shows the microphone level. No captions, and nothing is charged.',
+    file: 'Plays an audio file through the microphone path. No captions, ' +
+          'nothing charged.',
+    live: 'The real thing. Captions reach the phones and paid minutes are ' +
+          'used. Ten quiet minutes stop it on their own.'
   };
 
   function url(path, extra) {
@@ -103,6 +125,13 @@
       row.hidden = wanted.indexOf(current) === -1;
     });
     els.hint.textContent = HINTS[current] || '';
+    /* The live start is red, every other start is blue. The colour is the
+     * first signal that this button is not like the others. */
+    var live = current === 'live';
+    els.start.className = live ? 'spend' : 'primary';
+    els.start.textContent = live ? 'Start live' : 'Start';
+    els.sourceCard.className = live ? 'card danger' : 'card';
+    hideConfirm();
   }
 
   /* Only rebuild a dropdown when its contents actually changed, or the
@@ -128,10 +157,6 @@
     if (values.indexOf(chosen) !== -1) { select.value = chosen; }
   }
 
-  function seconds(value) {
-    return value === null || value === undefined ? '—' : value + ' s';
-  }
-
   /* Write one field. Missing values become an em dash rather than "undefined"
    * or an exception - a status page is most useful exactly when the thing it
    * reports is broken, so no single unexpected field may blank the rest. */
@@ -142,9 +167,7 @@
       : value;
   }
 
-  /* "a / b", or an em dash unless both halves are really there. Guards
-   * against null as well as undefined: the server sends neither today, but
-   * this page exists to be read when something is already wrong. */
+  /* "a / b", or an em dash unless both halves are really there. */
   function pair(a, b) {
     var ok = function (v) { return v !== null && v !== undefined; };
     return ok(a) && ok(b) ? a + ' / ' + b : '—';
@@ -155,10 +178,17 @@
     return value.toFixed(digits) + (suffix || '');
   }
 
+  function clock(secs) {
+    if (typeof secs !== 'number' || !isFinite(secs)) { return '—'; }
+    var whole = Math.floor(secs);
+    var mins = Math.floor(whole / 60);
+    var rest = whole % 60;
+    return mins + ':' + (rest < 10 ? '0' : '') + rest;
+  }
+
   /* Run one part of the render in isolation. One bad field used to take the
-   * whole table down with it: on 2026-10-13 a duplicate key in `els` made
-   * `fillSelect` throw on the first line of render(), and every row on the
-   * page showed an em dash while "Last error" showed a JavaScript message. */
+   * whole page down with it: a duplicate key in `els` once made `fillSelect`
+   * throw on the first line of render(), and every row showed an em dash. */
   function section(name, fn) {
     try {
       fn();
@@ -170,6 +200,7 @@
   function renderMeter(level) {
     if (!level) {
       els.meterFill.style.width = '0%';
+      els.meterFill.className = 'meter-fill';
       els.level.textContent = '—';
       els.clip.hidden = true;
       return;
@@ -177,96 +208,160 @@
     var db = level.db;
     var fraction = Math.max(0, Math.min(1, (db - FLOOR_DB) / -FLOOR_DB));
     els.meterFill.style.width = (fraction * 100).toFixed(1) + '%';
-    els.meterFill.classList.toggle('hot', level.peak >= 0.9);
-    els.level.textContent = db.toFixed(1) + ' dBFS   peak ' +
-      level.peak_db.toFixed(1) + ' dBFS';
+    els.meterFill.className = 'meter-fill' + (level.peak >= 0.9 ? ' hot' : '');
+    els.level.textContent = db.toFixed(1) + ' dB  (peak ' +
+      level.peak_db.toFixed(1) + ')';
     els.clip.hidden = !level.clipping;
   }
 
-  function renderUsage(usage) {
+  /* -- the state pill ---------------------------------------------------- */
+
+  function pillFor(status) {
+    if (status.engine_state === 'paused') { return ['PAUSED', 'paused']; }
+    if (!status.running) { return ['STOPPED', 'stopped']; }
+    if (status.mode === 'replay') { return ['REPLAY', 'replay']; }
+    /* A mic or file run captures audio but transcribes nothing, so it is
+     * neither live nor a replay. Saying so beats implying captions. */
+    if (!status.engine_state) { return ['AUDIO', 'audio']; }
+    return ['LIVE', 'live'];
+  }
+
+  function renderSpend(usage) {
     if (!usage) { return; }
-    var spend = usage.billable_minutes.toFixed(1) + ' min';
-    if (usage.estimated_usd !== null && usage.estimated_usd !== undefined) {
-      spend += '  ≈ $' + usage.estimated_usd.toFixed(2);
-      if (usage.budget_usd) {
-        spend += ' of $' + usage.budget_usd.toFixed(2);
+    text(els.spend, num(usage.billable_minutes, 1));
+    text(els.tSpend, num(usage.billable_minutes, 1, ' min'));
+
+    var used = usage.estimated_usd;
+    var budget = usage.budget_usd;
+    if (used === null || used === undefined) {
+      /* No rate configured, so no honest dollar figure. Saying so is better
+       * than printing a number that looks measured. */
+      text(els.cost, null);
+      text(els.left, null);
+      els.spendFill.style.width = '0%';
+      text(els.spendNote,
+        'Set the per-minute rate in .env to see dollars.');
+    } else {
+      text(els.cost, '$' + used.toFixed(2));
+      if (budget) {
+        var left = budget - used;
+        text(els.left, '$' + left.toFixed(2));
+        var share = Math.max(0, Math.min(1, used / budget));
+        els.spendFill.style.width = (share * 100).toFixed(1) + '%';
+        els.spendFill.className = share > 0.9 ? 'out'
+          : (share > 0.7 ? 'low' : '');
+        text(els.spendNote, 'Of a $' + budget.toFixed(2) + ' budget.', '');
+        els.spendCard.className = share > 0.9 ? 'card danger' : 'card';
+      } else {
+        text(els.left, null);
+        text(els.spendNote, '', '');
       }
-    } else if (usage.budget_usd) {
-      /* No rate configured, so no honest dollar figure. Say so rather than
-       * printing a number that looks measured. The env var is named in
-       * docs/CHECKPOINT.md, not here: a test greps every served file for the
-       * API key's variable prefix, and this page must stay clear of it. */
-      spend += '  ($' + usage.budget_usd.toFixed(2) + ' budget; set the ' +
-        'per-minute rate in .env to estimate dollars)';
     }
-    els.spend.textContent = spend;
-    els.free.textContent = usage.free_minutes.toFixed(1) + ' min';
-    els.runs.textContent = usage.runs +
+    text(els.free, num(usage.free_minutes, 1, ' min'));
+    text(els.runs, usage.runs === undefined ? null : usage.runs +
       (usage.unreadable_lines ? ' (' + usage.unreadable_lines +
-        ' unreadable line(s))' : '');
+        ' unreadable)' : ''));
+  }
+
+  /* Rows whose value is only an em dash are noise while nothing is running.
+   * Hidden rather than removed so they come straight back when a run starts. */
+  function tidyRows(running) {
+    var rows = els.statusCard.querySelectorAll('tr[data-row]');
+    Array.prototype.forEach.call(rows, function (row) {
+      var cell = row.cells[1];
+      var empty = !cell || cell.textContent === '—';
+      row.hidden = empty && !running;
+    });
   }
 
   function render(status) {
     status = status || {};
+    var running = !!status.running;
+
     section('sources', function () {
       fillSelect(els.capture, status.captures);
       fillSelect(els.file, status.audio_files);
     });
-    section('session', function () {
-      text(els.running, status.running
-        ? (status.paced ? 'running (real time)' : 'running (fast)')
-        : (status.live ? 'live, no feed' : 'stopped'));
+
+    section('topbar', function () {
+      var state = pillFor(status);
+      els.pill.textContent = state[0];
+      els.pill.className = 'pill ' + state[1];
+      text(els.tElapsed, running ? clock(status.elapsed) : null);
+      text(els.tViewers, status.viewers);
+      text(els.tEngine, status.engine_state, running ? 'running' : 'idle');
+      els.start.disabled = running;
+      els.stop.disabled = !running;
+    });
+
+    section('status', function () {
+      /* Leftover numbers from a finished run are useful, but only if they
+       * are labelled as the past. Showing them unmarked is how an operator
+       * reads a stopped session as a live one. */
+      var stale = !running && status.source;
+      text(els.statusHeading, stale ? 'Last run' : 'Status');
+      els.statusHeading.className = stale ? 'stale' : '';
+      /* The empty fallback matters: `text` turns '' into an em dash by
+       * default, which left a stray dash hanging under the table. */
+      text(els.statusNote, stale
+        ? 'These are from the run that just finished, not from now.'
+        : '', '');
+
       text(els.sourceText, status.source);
-      text(els.elapsed, seconds(status.elapsed));
+      text(els.elapsed, status.elapsed === undefined || status.elapsed === null
+        ? null : status.elapsed + ' s');
       text(els.audio, status.audio_total_s
         ? num(status.audio_ms / 1000, 1) + ' / ' + status.audio_total_s + ' s'
-        : (status.audio_ms ? num(status.audio_ms / 1000, 1, ' s') : '—'));
+        : (status.audio_ms ? num(status.audio_ms / 1000, 1, ' s') : null));
       text(els.responses, status.responses);
       text(els.seq, status.seq);
       text(els.viewers, pair(status.viewers, status.max_viewers));
       text(els.shed, pair(status.rejected, status.dropped));
       text(els.audioDropped, status.dropped_chunks === undefined
         || status.dropped_chunks === null
-        ? '—' : status.dropped_chunks + ' chunk(s)');
+        ? null : status.dropped_chunks);
       text(els.recording, status.recording, 'off');
       text(els.responseLog, status.capture, 'off');
+
       /* Counts only. The values are never in this payload. */
       var d = status.details;
       text(els.details, d ? (
         (d.title ? 'title, ' : 'no title, ') + d.speakers + ' speaker(s), '
-        + d.companies + ' company(ies), ' + d.terms + ' extra term(s)'
+        + d.companies + ' company(ies), ' + d.terms + ' word(s)'
       ) : null);
-    });
-    section('engine', function () {
+
       text(els.engine, status.engine_state);
-      if (els.engine) {
-        els.engine.className = status.engine_state === 'reconnecting'
-          ? 'error' : '';
-      }
+      els.engine.className = status.engine_state === 'reconnecting'
+        ? 'error' : '';
       text(els.lag, num(status.lag_seconds, 2, ' s'));
       text(els.retries, pair(status.reconnects, status.rollovers));
       text(els.lost, num(status.dropped_seconds, 1, ' s'));
-      if (els.lost) { els.lost.className = status.dropped_seconds ? 'error' : ''; }
+      els.lost.className = status.dropped_seconds ? 'error' : '';
       text(els.silence, num(status.silent_seconds, 0, ' s'));
       text(els.thisRun, num(
         typeof status.streamed_seconds === 'number'
           ? status.streamed_seconds / 60 : undefined, 2, ' min'));
+
+      tidyRows(running);
     });
+
     section('error', function () {
       /* The engine's error, not the page's. A JavaScript exception used to
        * land here, which read as "the transcription failed" when the truth
-       * was "this page has a bug". Page problems go to their own line. */
+       * was "this page has a bug". Page problems go to their own banner. */
       text(els.error, status.error, 'none');
-      if (els.error) { els.error.className = status.error ? 'error' : ''; }
-      if (els.start) { els.start.disabled = !!status.running; }
-      if (els.stop) { els.stop.disabled = !status.running; }
+      els.error.className = status.error ? 'error' : '';
+      els.errorBanner.textContent = status.error || '';
+      els.errorBanner.hidden = !status.error;
+      els.statusCard.className = status.error ? 'card danger' : 'card';
     });
-    section('meter', function () { renderMeter(status.level); });
-    section('usage', function () { renderUsage(status.usage); });
+
+    section('details', function () { showPending(status.details_pending); });
+    section('spend', function () { renderSpend(status.usage); });
   }
 
   /* A problem reaching or reading the server: this page's problem, kept
-   * apart from the engine's "Last error" row so the two are never confused. */
+   * apart from the engine's error so the two are never confused. */
   function pageProblem(message) {
     if (!els.page) { return; }
     els.page.textContent = message || '';
@@ -314,7 +409,7 @@
         if (!devices.length) {
           var option = document.createElement('option');
           option.value = '';
-          option.textContent = 'no input devices found';
+          option.textContent = 'no microphone found';
           els.device.appendChild(option);
         }
       })
@@ -337,10 +432,10 @@
 
   /* -- this talk's details ---------------------------------------------
    *
-   * Private. They are loaded once, by their own request, and never arrive
-   * with the status poll - so a page left open on a side screen shows counts
-   * and nothing else. Lists are one item per line, because a speaker name
-   * can contain a comma and an operator should not have to think about it.
+   * Private. They are loaded by their own request and never arrive with the
+   * status poll, so a page left open on a side screen shows counts and
+   * nothing else. Lists are one item per line, because a name can contain a
+   * comma and an operator should not have to think about it.
    */
 
   function lines(value) {
@@ -364,18 +459,20 @@
         els.dCompanies.value = (d.companies || []).join('\n');
         els.dTerms.value = (d.terms || []).join('\n');
         els.dNotes.value = d.notes || '';
-        els.dGlossary.textContent = 'Already in the shared glossary: '
+        els.dGlossary.textContent = 'Always included: '
           + (data.glossary_terms || []).join(', ');
         showPending(data.pending);
       })
       .catch(function (error) { fail(String(error.message || error)); });
   }
 
+  /* Saved-but-not-applied is the one state on this page an operator must not
+   * walk past, so it gets a bar of its own and the card border turns amber. */
   function showPending(pending) {
-    if (els.dApply) { els.dApply.hidden = !pending; }
-    if (pending) {
-      detailsState('Changes saved, not applied yet.', 'pending');
-    }
+    if (!els.applyBar) { return; }
+    els.applyBar.hidden = !pending;
+    els.detailsCard.className = pending ? 'card attention' : 'card';
+    if (pending) { detailsState('Saved — not in use yet.', 'pending'); }
   }
 
   function sendDetails(details, note) {
@@ -426,17 +523,19 @@
       .then(function (data) {
         showPending(data.pending);
         detailsState(data.applied
-          ? 'Applied — reconnected with the new details.'
-          : 'Nothing running; they are already in place for the next Start.',
-          'saved');
+          ? 'In use now.'
+          : 'Nothing running — they will be used at the next start.', 'saved');
       })
       .catch(function (error) { fail(String(error.message || error)); });
   });
 
-  els.source.addEventListener('change', showRows);
-  els.refreshDevices.addEventListener('click', loadDevices);
+  /* -- starting ---------------------------------------------------------- */
 
-  els.start.addEventListener('click', function () {
+  function hideConfirm() {
+    if (els.confirmBar) { els.confirmBar.hidden = true; }
+  }
+
+  function startParams() {
     var current = mode();
     var params = {
       source: current,
@@ -445,26 +544,51 @@
       log_responses: els.logResponses.checked ? 'true' : 'false'
     };
     if (current === 'replay') {
-      if (!els.capture.value) { return; }
+      if (!els.capture.value) { return null; }
       params.capture = els.capture.value;
     } else if (current === 'file') {
-      if (!els.file.value) { return; }
+      if (!els.file.value) { return null; }
       params.file = els.file.value;
     } else if (current === 'mic' || current === 'live') {
-      if (current === 'live' && !els.arm.checked) {
-        /* Two deliberate actions before any credit is spent. A checkbox
-         * rather than a confirm() dialog: a modal blocks every later
-         * instruction the page receives, including the Stop button. */
-        fail('tick "I mean it" first — a live run spends credit');
-        return;
-      }
       if (els.device.value !== '') { params.device = els.device.value; }
       params.channel = els.channel.value || '1';
+    }
+    return params;
+  }
+
+  els.source.addEventListener('change', showRows);
+  els.refreshDevices.addEventListener('click', loadDevices);
+
+  els.start.addEventListener('click', function () {
+    var params = startParams();
+    if (!params) { return; }
+    if (mode() === 'live') {
+      /* Two deliberate actions before any credit is spent: the checkbox, and
+       * then this. An inline bar rather than confirm(), because a modal
+       * dialog blocks every later instruction the page receives - including
+       * the Stop button. */
+      if (!els.arm.checked) {
+        fail('Tick "I mean it" first — a live run uses paid minutes.');
+        return;
+      }
+      els.confirmBar.hidden = false;
+      return;
     }
     post('/admin/start', params);
   });
 
-  els.stop.addEventListener('click', function () { post('/admin/stop'); });
+  els.confirmYes.addEventListener('click', function () {
+    var params = startParams();
+    hideConfirm();
+    if (params) { post('/admin/start', params); }
+  });
+
+  els.confirmNo.addEventListener('click', hideConfirm);
+
+  els.stop.addEventListener('click', function () {
+    hideConfirm();
+    post('/admin/stop');
+  });
 
   showRows();
   loadDetails();
