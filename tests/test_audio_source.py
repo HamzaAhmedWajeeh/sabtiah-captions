@@ -79,6 +79,22 @@ def dominant_freq(chunk: bytes, rate: int = SAMPLE_RATE) -> float:
     return float(np.fft.rfftfreq(samples.size, 1 / rate)[np.argmax(spectrum)])
 
 
+def tone_level(chunk: bytes, freq: float, rate: int = SAMPLE_RATE) -> float:
+    """How much energy a chunk holds near `freq`.
+
+    `dominant_freq` alone is a weak test of channel selection: a downmix of
+    two equally loud tones still has one of them as its argmax, so the
+    assertion passes while both channels are present. Comparing the level at
+    the wanted tone against the level at the *other* channel's tone is what
+    actually distinguishes selection from summing.
+    """
+    samples = np.frombuffer(chunk, dtype="<i2").astype(np.float64)
+    spectrum = np.abs(np.fft.rfft(samples * np.hanning(samples.size)))
+    freqs = np.fft.rfftfreq(samples.size, 1 / rate)
+    band = (freqs >= freq - 40) & (freqs <= freq + 40)
+    return float(spectrum[band].max()) if band.any() else 0.0
+
+
 # ---------------------------------------------------------------------------
 # Level
 # ---------------------------------------------------------------------------
@@ -375,6 +391,22 @@ async def one_second_of_blocks(rate=48000, channels=4):
     return blocks
 
 
+async def take(source, count: int, timeout: float = 10.0) -> list[bytes]:
+    """First `count` chunks out of a source, with a deadline.
+
+    The deadline matters: a regression that stops producing chunks would
+    otherwise hang the whole suite on `async for` rather than fail.
+    """
+    async def pull():
+        out: list[bytes] = []
+        async for chunk in source:
+            out.append(chunk)
+            if len(out) >= count:
+                return out
+        return out
+    return await asyncio.wait_for(pull(), timeout)
+
+
 async def test_mic_source_converts_a_48k_four_channel_device(fake_sd):
     """The normal Windows path: no 16 kHz, four channels, take channel 1."""
     fake = fake_sd(blocks=await one_second_of_blocks())
@@ -468,6 +500,118 @@ async def test_mic_callback_reaches_the_loop_from_its_own_thread(fake_sd):
     assert len(received[0]) == CHUNK_BYTES
     # The chunk was produced somewhere other than the event loop's thread.
     assert fake.stream.callback_thread != threading.main_thread().name
+
+
+# ---------------------------------------------------------------------------
+# MicSource with the venue's shape of device: a stereo USB interface fed from
+# a mixer, running at 44.1 or 48 kHz. Left and right carry different signals
+# here (440 Hz and 880 Hz), so a downmix, a wrong channel and an off-by-one
+# are all distinguishable from each other.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rate", [44100, 48000])
+@pytest.mark.parametrize(
+    "channel, wanted, rejected",
+    [(1, 440, 880), (2, 880, 440)],
+    ids=["left", "right"],
+)
+async def test_mic_source_picks_one_channel_of_a_stereo_interface(
+    fake_sd, rate, channel, wanted, rejected,
+):
+    """Channel 1 is left, channel 2 is right, at both interface rates.
+
+    The audio reaching Soniox must be the one channel the operator chose,
+    resampled to 16 kHz mono - not a sum of both. On a mixer feed the other
+    channel can be anything: the room mic, the house music, a dead input.
+    """
+    fake = fake_sd(blocks=await one_second_of_blocks(rate=rate, channels=2),
+                   rate=rate, channels=2)
+    source = MicSource(7, channel=channel)
+    await source.open()
+
+    assert source.device_rate == rate
+    assert source.device_channels == 2
+    assert source.native is False
+    assert f"ch {channel}/2" in source.describe()
+    assert source.status()["resampling"] is True
+
+    chunks = await take(source, 8)
+    await source.close()
+
+    # Exact 100 ms chunks, whatever ratio the resampler was handed.
+    assert {len(c) for c in chunks} == {CHUNK_BYTES}
+    assert source.audio_ms >= 800
+
+    middle = chunks[4]
+    assert dominant_freq(middle) == pytest.approx(wanted, abs=25)
+    # And the other channel is gone, not merely quieter than the wanted one.
+    assert tone_level(middle, rejected) < tone_level(middle, wanted) / 10
+
+
+async def test_mic_source_resamples_a_stereo_interface_without_clicking(
+    fake_sd,
+):
+    """One second in, one second out, and no boundary step in the waveform.
+
+    `_Resampler` is tested directly for this, but only on blocks handed to it
+    whole. Here the blocks arrive as the driver delivers them - one 100 ms
+    callback at a time, after a channel has been sliced out of each - which
+    is the arrangement that would show a resampler rebuilt per block.
+    """
+    fake = fake_sd(blocks=await one_second_of_blocks(rate=48000, channels=2),
+                   rate=48000, channels=2)
+    source = MicSource(7, channel=1)
+    await source.open()
+    chunks = await take(source, 10)
+    await source.close()
+
+    assert len(chunks) == 10  # a second of 48 kHz stereo is ten 16 kHz chunks
+    joined = np.frombuffer(b"".join(chunks), dtype="<i2").astype(np.int32)
+    diffs = np.abs(np.diff(joined))
+    assert diffs.max() < np.percentile(diffs, 99) * 2.5
+    assert fake.stream.kwargs["channels"] == 2
+    assert fake.stream.kwargs["samplerate"] == 48000
+
+
+async def test_mic_source_never_lets_the_driver_downmix_a_stereo_device(
+    fake_sd,
+):
+    """A device that *does* offer 16 kHz must still be opened in stereo.
+
+    This is the one that was broken. `_choose_format` asked for 16 kHz mono
+    first and returned as soon as the driver agreed, so on an interface that
+    supports 16 kHz the operator's channel setting was silently discarded and
+    the driver summed both inputs. A mixer feed with the room mic on the
+    other channel would have gone out over the captions with no sign of it on
+    `/admin` - `describe()` did not even mention a channel.
+    """
+    blocks = await one_second_of_blocks(rate=SAMPLE_RATE, channels=2)
+    fake = fake_sd(blocks=blocks, rate=SAMPLE_RATE, channels=2,
+                   native_16k=True)
+    source = MicSource(7, channel=2)
+    await source.open()
+
+    assert source.device_channels == 2
+    assert "ch 2/2" in source.describe()
+    # Still no resampling: 16 kHz stereo in, 16 kHz mono out.
+    assert source.device_rate == SAMPLE_RATE
+    assert source.native is True
+    assert every_check_asked_for_stereo(fake)
+
+    chunks = await take(source, 8)
+    await source.close()
+
+    middle = chunks[4]
+    assert dominant_freq(middle) == pytest.approx(880, abs=25)
+    assert tone_level(middle, 440) < tone_level(middle, 880) / 10
+
+
+def every_check_asked_for_stereo(fake) -> bool:
+    """No `check_input_settings` call offered the driver a mono downmix."""
+    return bool(fake.checked) and all(
+        check.get("channels") == 2 for check in fake.checked
+    )
 
 
 def test_input_devices_is_empty_without_an_audio_stack(monkeypatch):

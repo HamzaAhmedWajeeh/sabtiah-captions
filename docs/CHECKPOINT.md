@@ -190,6 +190,32 @@ gaps in it invites the question of whether a run was simply forgotten.
 `tools/list_devices.py` — the device list, `--probe` to test each device for
 native 16 kHz, and `--listen` for a terminal level meter.
 
+### Fixed 2026-10-17: a stereo interface could be downmixed by the driver
+
+`MicSource` took one channel rather than letting the driver downmix — but
+only on the path where the device *refused* 16 kHz. `_choose_format` asked for
+**16 kHz mono** first and returned the moment the driver agreed, so on an
+interface that does support 16 kHz the operator's Channel setting was
+silently discarded and the driver summed both inputs. Nothing showed it:
+`describe()` did not even print a channel, so `/admin` read
+`Scarlett 2i2 USB @ 16000 Hz` and looked correct.
+
+That is exactly the venue's shape of device — a USB interface fed from a
+mixer — so it was worth fixing before a live run. The rate is still
+negotiated; the **channel count never is**. A multi-channel device is now
+always opened with every channel and the channel picked in the callback,
+whatever rate it agrees to. `native` now means "no resampling" (the rate
+alone), so a 16 kHz stereo device is native and still channel-selected.
+
+Six tests in `tests/test_audio_source.py` cover it: left and right at both
+44.1 and 48 kHz, each asserting the *other* channel's tone is 20 dB down
+rather than merely quieter — `dominant_freq` alone passes on a downmix of two
+equal tones — plus the 16 kHz-stereo case that was broken, and a
+no-clicks-across-callbacks check on the mic path. `--probe` in
+`tools/list_devices.py` now probes with the device's own channel count, so it
+cannot print "native 16 kHz" for a device the capture path will open in
+stereo.
+
 ### `/admin` is now a three-source page
 
 `source=replay` plays a capture through `CaptionState` — captions, no audio.

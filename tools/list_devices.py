@@ -63,16 +63,22 @@ def print_devices(probe: bool) -> int:
 
     if probe:
         print()
-        print(f"Probing each device for {SAMPLE_RATE} Hz mono int16:")
+        print(f"Probing each device for {SAMPLE_RATE} Hz int16:")
         import sounddevice as sd
 
         for device in devices:
+            # Probe with the device's own channel count, which is what
+            # `MicSource._choose_format` asks for - a multi-channel device is
+            # never opened as mono, because the driver would downmix it and
+            # ignore the channel setting. Probing with channels=1 here would
+            # print "native 16 kHz" for a stereo interface that the capture
+            # path will in fact open in stereo.
             try:
                 sd.check_input_settings(
-                    device=device["index"], channels=1,
+                    device=device["index"], channels=device["channels"],
                     samplerate=SAMPLE_RATE, dtype="int16",
                 )
-                verdict = "native 16 kHz mono"
+                verdict = f"native 16 kHz ({device['channels']} ch)"
             except Exception as exc:
                 # Not a failure: capturing at the device rate and converting
                 # in `audio_source._Resampler` is the normal path.

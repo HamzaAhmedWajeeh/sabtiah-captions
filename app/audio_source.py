@@ -376,12 +376,20 @@ class MicSource(AudioSource):
     # -- device negotiation ------------------------------------------------
 
     def _choose_format(self) -> None:
-        """Ask for 16 kHz mono; settle for what the device admits to.
+        """Ask for 16 kHz; settle for the rate the device admits to.
 
         Deliberately pessimistic: `check_input_settings` is cheap and failing
         here produces a readable message, whereas opening a stream with
         settings the driver rejects raises PortAudio's own error from inside
         the callback thread, where it is much harder to explain.
+
+        The *rate* is negotiated; the *channel count* is not. A multi-channel
+        device is always opened with every channel and the channel picked in
+        the callback, because asking a multi-channel interface for mono makes
+        the driver downmix - which on the venue's USB box would sum the live
+        mic into whatever else is on the other inputs, and would throw away
+        the operator's channel setting without saying so anywhere. Taking
+        16 kHz mono from a stereo interface was exactly that bug.
         """
         import sounddevice as sd
 
@@ -393,14 +401,14 @@ class MicSource(AudioSource):
                 f"device has {max_channels} input channel(s), "
                 f"--channel {self.channel} does not exist"
             )
+        self.device_channels = max_channels
 
         try:
             sd.check_input_settings(
-                device=self.device, channels=1, samplerate=SAMPLE_RATE,
-                dtype="int16",
+                device=self.device, channels=self.device_channels,
+                samplerate=SAMPLE_RATE, dtype="int16",
             )
             self.device_rate = SAMPLE_RATE
-            self.device_channels = 1
             self.native = True
             return
         except Exception:
@@ -408,12 +416,9 @@ class MicSource(AudioSource):
 
         self.device_rate = int(round(float(info.get("default_samplerate")
                                            or SAMPLE_RATE)))
-        # Whatever the device's native rate is, take every channel and pick
-        # one here: asking a multi-channel interface for mono makes the driver
-        # downmix, which on the venue's USB box would sum the live mic into
-        # whatever else is on the other inputs.
-        self.device_channels = max_channels
-        self.native = self.device_rate == SAMPLE_RATE and max_channels == 1
+        # `native` is about the rate alone - a 16 kHz stereo device needs no
+        # resampling, only channel selection.
+        self.native = self.device_rate == SAMPLE_RATE
         sd.check_input_settings(
             device=self.device, channels=self.device_channels,
             samplerate=self.device_rate, dtype="int16",
